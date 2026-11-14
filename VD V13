@@ -1,0 +1,2703 @@
+-- GOD PANEL v3 (tema oranye, menu kiri, 1 script)
+-- Menu kiri: God, Tele, Esp, Speed, Aim (SILENT AIM), Lampu, Generator + RESET
+-- Pengaturan otomatis disimpan (file GodPanel_Config.json) dan dimuat lagi saat script dijalankan.
+
+local Players=game:GetService("Players")
+local RunService=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local StarterGui=game:GetService("StarterGui")
+local Lighting=game:GetService("Lighting")
+local GuiService=game:GetService("GuiService")
+local HttpService=game:GetService("HttpService")
+local lp=Players.LocalPlayer
+local G=(getgenv and getgenv()) or _G
+
+-- ===================== BERSIHKAN VERSI LAMA =====================
+if G.GodConns then
+	for _,c in ipairs(G.GodConns) do pcall(function() c:Disconnect() end) end
+end
+local conns={}
+G.GodConns=conns
+local function track(c) conns[#conns+1]=c return c end
+
+-- matikan hook silent aim versi lama (SafeAim) supaya tidak dobel
+if G.SafeAimST then G.SafeAimST.on=false end
+
+pcall(function() RunService:UnbindFromRenderStep("GodAim") end)
+pcall(function() RunService:UnbindFromRenderStep("GodAimLine") end)
+pcall(function() RunService:UnbindFromRenderStep("DeltaPart5_SC") end)
+
+do
+	local roots={}
+	pcall(function()
+		local pg=lp:WaitForChild("PlayerGui",5)
+		if pg then roots[#roots+1]=pg end
+	end)
+	pcall(function() roots[#roots+1]=game:GetService("CoreGui") end)
+	pcall(function() if gethui then roots[#roots+1]=gethui() end end)
+	for _,r in ipairs(roots) do
+		for _,n in ipairs({"GodGui","GodESP","DeltaPart5_Skillcheck","GodAimMini","SafeAimGui"}) do
+			pcall(function()
+				local o=r:FindFirstChild(n)
+				if o then o:Destroy() end
+			end)
+		end
+	end
+end
+
+-- ===================== CONFIG (SIMPAN) =====================
+local CFG_FILE="GodPanel_Config.json"
+local saved={}
+do
+	local ok,data=pcall(function()
+		if isfile and readfile and isfile(CFG_FILE) then
+			return HttpService:JSONDecode(readfile(CFG_FILE))
+		end
+	end)
+	if ok and type(data)=="table" then
+		saved=data
+	elseif type(G.GodConfig)=="table" then
+		saved=G.GodConfig
+	end
+end
+
+local loading=true
+local controls={}
+local saveQueued=false
+local autoSave=(saved._autosave~=false)
+
+local function saveNow()
+	local t={_autosave=autoSave}
+	if autoSave then
+		for k,c in pairs(controls) do t[k]=c.get() end
+	end
+	G.GodConfig=t
+	pcall(function()
+		if writefile then writefile(CFG_FILE,HttpService:JSONEncode(t)) end
+	end)
+end
+local function queueSave()
+	if loading or saveQueued or not autoSave then return end
+	saveQueued=true
+	task.delay(0.5,function()
+		saveQueued=false
+		saveNow()
+	end)
+end
+
+-- ===================== HELPER =====================
+local FONT=Enum.Font.Code
+local FONTB=Enum.Font.SourceSansBold
+
+local BG=Color3.fromRGB(24,19,14)
+local SIDE=Color3.fromRGB(34,27,20)
+local SIDE2=Color3.fromRGB(52,40,28)
+local ROW=Color3.fromRGB(42,33,24)
+local HEAD=Color3.fromRGB(40,30,20)
+local ACC=Color3.fromRGB(255,140,0)
+local TXT=Color3.fromRGB(255,240,225)
+local DIM=Color3.fromRGB(180,160,140)
+local OFFBG=Color3.fromRGB(66,52,38)
+local BLACK=Color3.fromRGB(0,0,0)
+local GREEN=Color3.fromRGB(0,255,120)
+
+local PALETTE={
+	{n="Merah",c=Color3.fromRGB(220,60,60)},
+	{n="Oranye",c=Color3.fromRGB(235,130,30)},
+	{n="Kuning",c=Color3.fromRGB(200,170,40)},
+	{n="Hijau",c=Color3.fromRGB(60,180,90)},
+	{n="Cyan",c=Color3.fromRGB(60,170,210)},
+	{n="Biru",c=Color3.fromRGB(80,110,220)},
+	{n="Ungu",c=Color3.fromRGB(130,70,190)},
+	{n="Pink",c=Color3.fromRGB(220,100,160)},
+	{n="Putih",c=Color3.fromRGB(230,230,230)},
+}
+
+local function new(class,props,parent)
+	local o=Instance.new(class)
+	for k,v in pairs(props) do o[k]=v end
+	o.Parent=parent
+	return o
+end
+local function corner(o,r) new("UICorner",{CornerRadius=UDim.new(0,r or 6)},o) end
+local function stroke(o,color,th)
+	return new("UIStroke",{Color=color,Thickness=th or 1.5,ApplyStrokeMode=Enum.ApplyStrokeMode.Border},o)
+end
+local function notify(t,x)
+	if loading then return end
+	pcall(function() StarterGui:SetCore("SendNotification",{Title=t;Text=x;Duration=2.5;}) end)
+end
+local function getHRP(plr)
+	local c=plr and plr.Character
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+-- daftar pemain
+local playerListeners={}
+local knownPlayers={}
+local function playersChanged()
+	local changed=false
+	local cur={}
+	for _,pl in ipairs(Players:GetPlayers()) do
+		cur[pl]=true
+		if not knownPlayers[pl] then changed=true end
+	end
+	for pl in pairs(knownPlayers) do
+		if not cur[pl] then changed=true end
+	end
+	knownPlayers=cur
+	return changed
+end
+local function firePlayers()
+	for _,fn in ipairs(playerListeners) do pcall(fn) end
+end
+local function onPlayers(fn)
+	table.insert(playerListeners,fn)
+	pcall(fn)
+end
+playersChanged()
+track(Players.PlayerAdded:Connect(function() task.wait(0.2); playersChanged(); firePlayers() end))
+track(Players.PlayerRemoving:Connect(function() task.wait(0.1); playersChanged(); firePlayers() end))
+
+-- tembak alat (auto serang)
+local lastFire=0
+local function fireTool(targetPart)
+	local now=os.clock()
+	if now-lastFire<0.08 then return false end
+	local char=lp.Character
+	local tool=char and char:FindFirstChildOfClass("Tool")
+	if not tool then return false end
+	lastFire=now
+	pcall(function() tool:Activate() end)
+	local handle=tool:FindFirstChild("Handle")
+	if handle and targetPart and firetouchinterest then
+		pcall(function()
+			firetouchinterest(targetPart,handle,0)
+			firetouchinterest(targetPart,handle,1)
+		end)
+	end
+	return true
+end
+
+-- ===================== GUI UTAMA =====================
+local main=Instance.new("ScreenGui")
+main.Name="GodGui"
+main.ResetOnSpawn=false
+main.DisplayOrder=999
+do
+	local ok=pcall(function()
+		main.Parent=(gethui and gethui()) or game:GetService("CoreGui")
+	end)
+	if not ok or not main.Parent then
+		main.Parent=lp:WaitForChild("PlayerGui")
+	end
+end
+local espFolder=new("Folder",{Name="GodESP"},main.Parent)
+
+local Frame=new("Frame",{
+	BackgroundColor3=BG,Position=UDim2.new(0.05,0,0.2,0),
+	Size=UDim2.new(0,340,0,290),Active=true,ClipsDescendants=true,
+},main)
+corner(Frame,10)
+local scaleObj=new("UIScale",{Scale=1},Frame)
+stroke(Frame,ACC,2)
+
+-- header
+local Head=new("Frame",{BackgroundColor3=HEAD,Size=UDim2.new(1,0,0,30)},Frame)
+local TitleLbl=new("TextLabel",{
+	BackgroundTransparency=1,Position=UDim2.new(0,10,0,0),Size=UDim2.new(1,-150,1,0),
+	Font=FONTB,Text="Fungsi",TextColor3=ACC,TextSize=17,
+	TextXAlignment=Enum.TextXAlignment.Left,
+},Head)
+
+local function headBtn(text,fromRight,color,w)
+	local b=new("TextButton",{
+		BackgroundColor3=color,Position=UDim2.new(1,-fromRight,0.5,-11),
+		Size=UDim2.new(0,w or 24,0,22),Font=FONTB,Text=text,
+		TextColor3=TXT,TextSize=15,AutoButtonColor=true,
+	},Head)
+	corner(b,5)
+	return b
+end
+local closeBtn=headBtn("x",30,Color3.fromRGB(170,50,30))
+local miniBtn=headBtn("=",58,SIDE2)
+local plusBtn=headBtn("+",86,SIDE2)
+local minusBtn=headBtn("-",114,SIDE2)
+
+local Body=new("Frame",{BackgroundTransparency=1,Position=UDim2.new(0,0,0,30),Size=UDim2.new(1,0,1,-30)},Frame)
+local sidebar=new("Frame",{BackgroundColor3=SIDE,Size=UDim2.new(0,74,1,0)},Body)
+new("UIListLayout",{
+	Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder,
+	HorizontalAlignment=Enum.HorizontalAlignment.Center,
+},sidebar)
+new("UIPadding",{PaddingTop=UDim.new(0,4)},sidebar)
+local content=new("Frame",{
+	BackgroundTransparency=1,Position=UDim2.new(0,78,0,4),Size=UDim2.new(1,-82,1,-8),
+},Body)
+
+local function setScale(v)
+	scaleObj.Scale=math.clamp(math.floor(v*10+0.5)/10,0.6,1.6)
+end
+minusBtn.MouseButton1Click:Connect(function() setScale(scaleObj.Scale-0.1) end)
+plusBtn.MouseButton1Click:Connect(function() setScale(scaleObj.Scale+0.1) end)
+
+local minimized=false
+miniBtn.MouseButton1Click:Connect(function()
+	minimized=not minimized
+	Body.Visible=not minimized
+	Frame.Size=minimized and UDim2.new(0,340,0,30) or UDim2.new(0,340,0,290)
+end)
+closeBtn.MouseButton1Click:Connect(function() Frame.Visible=false end)
+
+-- geser
+local function makeDraggable(handle,target,onTap)
+	local dragging,moved,dragStart,startPos,factor=false,false,nil,nil,1
+	handle.InputBegan:Connect(function(i)
+		if i.UserInputType==Enum.UserInputType.MouseButton1
+		or i.UserInputType==Enum.UserInputType.Touch then
+			dragging=true; moved=false
+			dragStart=i.Position; startPos=target.Position
+			local sc=target:FindFirstChildOfClass("UIScale")
+			factor=sc and sc.Scale or 1
+			i.Changed:Connect(function()
+				if i.UserInputState==Enum.UserInputState.End then
+					dragging=false
+					if not moved and onTap then onTap() end
+				end
+			end)
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType==Enum.UserInputType.MouseMovement
+		or i.UserInputType==Enum.UserInputType.Touch) then
+			local d=i.Position-dragStart
+			if d.Magnitude>6 then moved=true end
+			d=d/factor
+			target.Position=UDim2.new(
+				startPos.X.Scale,startPos.X.Offset+d.X,
+				startPos.Y.Scale,startPos.Y.Offset+d.Y)
+		end
+	end))
+end
+makeDraggable(Head,Frame)
+
+local iconBtn=new("TextButton",{
+	BackgroundColor3=HEAD,Position=UDim2.new(0,10,0.12,0),Size=UDim2.new(0,46,0,46),
+	Font=FONTB,Text="☠️",TextSize=26,TextColor3=ACC,AutoButtonColor=false,Active=true,
+},main)
+corner(iconBtn,23)
+stroke(iconBtn,ACC,2)
+makeDraggable(iconBtn,iconBtn,function() Frame.Visible=not Frame.Visible end)
+
+-- ===================== TAB + KOMPONEN =====================
+local tabs={}
+local function showTab(n)
+	for i,t in ipairs(tabs) do
+		local on=(i==n)
+		t.page.Visible=on
+		t.btn.BackgroundColor3=on and ACC or SIDE2
+		t.btn.TextColor3=on and BLACK or TXT
+	end
+	if tabs[n] then TitleLbl.Text=tabs[n].title end
+end
+
+local function addTab(label,title)
+	local idx=#tabs+1
+	local btn=new("TextButton",{
+		Size=UDim2.new(1,-8,0,26),BackgroundColor3=SIDE2,Font=FONTB,Text=label,
+		TextColor3=TXT,TextSize=13,LayoutOrder=idx,AutoButtonColor=false,
+	},sidebar)
+	corner(btn,6)
+	local page=new("ScrollingFrame",{
+		BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),BorderSizePixel=0,
+		ScrollBarThickness=3,ScrollBarImageColor3=ACC,CanvasSize=UDim2.new(0,0,0,0),
+		AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false,
+	},content)
+	new("UIListLayout",{
+		Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder,
+		HorizontalAlignment=Enum.HorizontalAlignment.Center,
+	},page)
+	new("UIPadding",{PaddingTop=UDim.new(0,2),PaddingBottom=UDim.new(0,6)},page)
+	tabs[idx]={btn=btn,page=page,title=title}
+	btn.MouseButton1Click:Connect(function() showTab(idx) end)
+
+	local P={page=page}
+	local n=0
+	local function ord() n=n+1 return n end
+
+	function P.row(h)
+		local row=new("Frame",{Size=UDim2.new(1,-8,0,h or 30),BackgroundColor3=ROW,LayoutOrder=ord()},page)
+		corner(row,6)
+		return row
+	end
+	function P.rowLabel(row,text)
+		return new("TextLabel",{
+			BackgroundTransparency=1,Position=UDim2.new(0,8,0,0),Size=UDim2.new(1,-100,1,0),
+			Font=FONT,Text=text,TextColor3=TXT,TextSize=13,
+			TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,
+		},row)
+	end
+	function P.rowButton(row,text,w,fromRight)
+		local b=new("TextButton",{
+			Position=UDim2.new(1,-((fromRight or 6)+w),0.5,-11),Size=UDim2.new(0,w,0,22),
+			BackgroundColor3=OFFBG,Font=FONTB,Text=text,TextColor3=TXT,TextSize=13,
+			AutoButtonColor=true,
+		},row)
+		corner(b,5)
+		return b
+	end
+	function P.info(text,h)
+		local l=new("TextLabel",{
+			Size=UDim2.new(1,-8,0,h or 24),BackgroundColor3=ROW,Font=FONT,Text=text,
+			TextColor3=DIM,TextSize=12,TextWrapped=true,
+			TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
+			LayoutOrder=ord(),
+		},page)
+		corner(l,6)
+		new("UIPadding",{PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,6),PaddingTop=UDim.new(0,4)},l)
+		return l
+	end
+	function P.button(text,cb,color)
+		local b=new("TextButton",{
+			Size=UDim2.new(1,-8,0,30),BackgroundColor3=color or SIDE2,Font=FONTB,Text=text,
+			TextColor3=TXT,TextSize=14,LayoutOrder=ord(),AutoButtonColor=true,
+		},page)
+		corner(b,6)
+		b.MouseButton1Click:Connect(function() if cb then cb() end end)
+		return b
+	end
+	function P.container()
+		local f=new("Frame",{
+			Size=UDim2.new(1,-8,0,0),AutomaticSize=Enum.AutomaticSize.Y,
+			BackgroundTransparency=1,LayoutOrder=ord(),
+		},page)
+		new("UIListLayout",{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},f)
+		return f
+	end
+	function P.toggle(key,label,default,cb)
+		local row=P.row(30)
+		P.rowLabel(row,label)
+		local btn=P.rowButton(row,"OFF",58)
+		local c={value=false,default=default and true or false}
+		local function paint()
+			btn.Text=c.value and "ON" or "OFF"
+			btn.BackgroundColor3=c.value and ACC or OFFBG
+			btn.TextColor3=c.value and BLACK or DIM
+		end
+		function c.set(v,quiet)
+			c.value=v and true or false
+			paint()
+			if cb and not quiet then cb(c.value) end
+			queueSave()
+		end
+		function c.get() return c.value end
+		btn.MouseButton1Click:Connect(function() c.set(not c.value) end)
+		c.value=c.default
+		paint()
+		if c.default and cb then pcall(cb,true) end
+		if key then controls[key]=c end
+		return c
+	end
+	function P.colors(key,label,default,cb)
+		local row=P.row(48)
+		new("TextLabel",{
+			BackgroundTransparency=1,Position=UDim2.new(0,8,0,2),Size=UDim2.new(1,-16,0,16),
+			Font=FONT,Text=label,TextColor3=DIM,TextSize=11,
+			TextXAlignment=Enum.TextXAlignment.Left,
+		},row)
+		local c={value=default,default=default}
+		local sw={}
+		local function paint()
+			for i,s in ipairs(sw) do s.Enabled=(i==c.value) end
+		end
+		function c.set(i,quiet)
+			i=math.clamp(math.floor(tonumber(i) or c.default),1,#PALETTE)
+			c.value=i
+			paint()
+			if cb and not quiet then cb(i) end
+			queueSave()
+		end
+		function c.get() return c.value end
+		for i,p in ipairs(PALETTE) do
+			local b=new("TextButton",{
+				BackgroundColor3=p.c,Text="",AutoButtonColor=false,
+				Position=UDim2.new(0,8+(i-1)*26,0,22),Size=UDim2.new(0,22,0,20),
+			},row)
+			corner(b,5)
+			sw[i]=new("UIStroke",{
+				Color=Color3.fromRGB(255,255,255),Thickness=2,Enabled=false,
+				ApplyStrokeMode=Enum.ApplyStrokeMode.Border,
+			},b)
+			b.MouseButton1Click:Connect(function() c.set(i) end)
+		end
+		paint()
+		if key then controls[key]=c end
+		return c
+	end
+	return P
+end
+
+local function section(name,fn)
+	local ok,err=pcall(fn)
+	if not ok then
+		warn("["..name.." ERROR] "..tostring(err))
+	end
+end
+
+-- =====================================================================
+-- TAB GOD
+-- =====================================================================
+section("GOD",function()
+	local P=addTab("God","GOD")
+	local GOD_HP=100000
+	local godOn,noTouchOn=false,false
+	local origMax=100
+	local lastSafeCFrame=nil
+	local godConns={}
+	local touchConn=nil
+
+	local function clearGodConns()
+		for _,c in ipairs(godConns) do pcall(function() c:Disconnect() end) end
+		godConns={}
+	end
+	local function setNoTouch(char,on)
+		for _,p in ipairs(char:GetDescendants()) do
+			if p:IsA("BasePart") and not p:FindFirstAncestorOfClass("Tool") then
+				pcall(function() p.CanTouch=not on end)
+			end
+		end
+	end
+	local function applyNoTouch()
+		if touchConn then touchConn:Disconnect(); touchConn=nil end
+		local char=lp.Character
+		if not char then return end
+		local on=(godOn and noTouchOn)
+		setNoTouch(char,on)
+		if on then
+			touchConn=char.DescendantAdded:Connect(function(d)
+				if d:IsA("BasePart") and not d:FindFirstAncestorOfClass("Tool") then
+					pcall(function() d.CanTouch=false end)
+				end
+			end)
+		end
+	end
+
+	-- sumber darah lain
+	local hpSources={}
+	local hpSeen=setmetatable({},{__mode="k"})
+	local hpSeenAttr=setmetatable({},{__mode="k"})
+	local function isHpName(n)
+		local l=string.lower(n)
+		if string.find(l,"max",1,true) then return false end
+		for _,w in ipairs({"health","hp","darah","blood","life","vitality"}) do
+			if string.find(l,w,1,true) then return true end
+		end
+		return false
+	end
+	local function readSrc(r)
+		if r.kind=="value" then return r.obj.Value end
+		return r.inst:GetAttribute(r.name)
+	end
+	local function scanParent(parent,deep)
+		if not parent then return end
+		local items=deep and parent:GetDescendants() or parent:GetChildren()
+		for _,d in ipairs(items) do
+			if (d:IsA("NumberValue") or d:IsA("IntValue")) and isHpName(d.Name) and not hpSeen[d] then
+				hpSeen[d]=true
+				table.insert(hpSources,{kind="value",obj=d,max=d.Value})
+			end
+		end
+		for name,val in pairs(parent:GetAttributes()) do
+			if type(val)=="number" and isHpName(name) then
+				hpSeenAttr[parent]=hpSeenAttr[parent] or {}
+				if not hpSeenAttr[parent][name] then
+					hpSeenAttr[parent][name]=true
+					table.insert(hpSources,{kind="attr",inst=parent,name=name,max=val})
+				end
+			end
+		end
+	end
+	local function scanHp()
+		local char=lp.Character
+		if char then scanParent(char,true) end
+		local hum=char and char:FindFirstChildOfClass("Humanoid")
+		if hum then scanParent(hum,false) end
+		for _,c in ipairs(lp:GetChildren()) do
+			if c.Name~="PlayerGui" then scanParent(c,true) end
+		end
+		scanParent(lp,false)
+		local rs=game:GetService("ReplicatedStorage")
+		local pf=rs:FindFirstChild(lp.Name) or rs:FindFirstChild(tostring(lp.UserId))
+		if pf then scanParent(pf,true) end
+		local ls=lp:FindFirstChild("leaderstats")
+		if ls then scanParent(ls,false) end
+		for i=#hpSources,1,-1 do
+			local r=hpSources[i]
+			local parent=(r.kind=="value") and r.obj.Parent or r.inst.Parent
+			if not parent then
+				table.remove(hpSources,i)
+			else
+				local cur=readSrc(r)
+				if type(cur)=="number" and cur>r.max then r.max=cur end
+			end
+		end
+	end
+	local function healSources(force)
+		for _,r in ipairs(hpSources) do
+			local cur=readSrc(r)
+			if type(cur)=="number" and cur~=r.max and (force or cur<r.max) then
+				if r.kind=="value" then
+					pcall(function() r.obj.Value=r.max end)
+				else
+					pcall(function() r.inst:SetAttribute(r.name,r.max) end)
+				end
+			end
+		end
+	end
+
+	local function setupChar(char)
+		local hum=char:WaitForChild("Humanoid",10)
+		local hrp=char:WaitForChild("HumanoidRootPart",10)
+		if not hum or not hrp then return end
+		clearGodConns()
+		if godOn then
+			hum.MaxHealth=GOD_HP
+			hum.Health=GOD_HP
+			pcall(function() hum.BreakJointsOnDeath=false end)
+			pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Dead,false) end)
+			table.insert(godConns,hum.Died:Connect(function()
+				if not godOn then return end
+				task.wait(0.1)
+				if lastSafeCFrame then hrp.CFrame=lastSafeCFrame end
+				hum.MaxHealth=GOD_HP
+				hum.Health=GOD_HP
+			end))
+			table.insert(godConns,hum.HealthChanged:Connect(function()
+				if godOn and hum.Parent and hum.Health<hum.MaxHealth then
+					hum.Health=hum.MaxHealth
+				end
+			end))
+		end
+		applyNoTouch()
+	end
+
+	-- UI
+	P.toggle("god","GOD MODE",false,function(on)
+		godOn=on
+		local char=lp.Character
+		local hum=char and char:FindFirstChildOfClass("Humanoid")
+		if on then
+			if hum and hum.MaxHealth<GOD_HP then origMax=hum.MaxHealth end
+			if char then task.spawn(setupChar,char) end
+			notify("GOD MODE ON","HP terkunci")
+		else
+			clearGodConns()
+			if hum then
+				hum.MaxHealth=origMax
+				hum.Health=origMax
+				pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Dead,true) end)
+			end
+			applyNoTouch()
+			notify("GOD MODE OFF","HP normal lagi")
+		end
+	end)
+	P.toggle("noTouch","KEBAL TOOL",false,function(on)
+		noTouchOn=on
+		applyNoTouch()
+		if on then notify("Kebal tool ON","Aktif saat GOD MODE ON") end
+	end)
+	P.button("FULL HP SEKARANG",function()
+		local char=lp.Character
+		local hum=char and char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.Health=hum.MaxHealth end
+		scanHp()
+		healSources(true)
+		notify("HP Full","Darah diisi penuh")
+	end,Color3.fromRGB(150,80,20))
+	local hpLbl=P.info("HP: -",24)
+	local posLbl=P.info("Posisi: -",24)
+	local srcLbl=P.info("Sumber HP: mencari...",40)
+
+	track(RunService.Heartbeat:Connect(function()
+		local char=lp.Character
+		local hrp=char and char:FindFirstChild("HumanoidRootPart")
+		local hum=char and char:FindFirstChildOfClass("Humanoid")
+		if hrp and hum then
+			if godOn then
+				if hum.MaxHealth~=GOD_HP then hum.MaxHealth=GOD_HP end
+				if hum.Health<GOD_HP then hum.Health=GOD_HP end
+				healSources(false)
+			end
+			if hum.Health>0 then
+				lastSafeCFrame=hrp.CFrame
+			end
+		end
+	end))
+
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.33)
+			if Frame.Visible and P.page.Visible then
+				local char=lp.Character
+				local hrp=char and char:FindFirstChild("HumanoidRootPart")
+				local hum=char and char:FindFirstChildOfClass("Humanoid")
+				if hrp and hum then
+					local p=hrp.Position
+					posLbl.Text=string.format("Posisi: %.0f, %.0f, %.0f",p.X,p.Y,p.Z)
+					local hp=hum.Health
+					if godOn and hp>=GOD_HP*0.99 then
+						hpLbl.Text="HP: GOD (terkunci)"
+					else
+						hpLbl.Text=string.format("HP: %.0f / %.0f",hp,hum.MaxHealth)
+					end
+				end
+			end
+		end
+	end)
+
+	local watchChar,watchHum=nil,nil
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.3)
+			local c=lp.Character
+			local h=c and c:FindFirstChildOfClass("Humanoid")
+			if c and h and (c~=watchChar or h~=watchHum) then
+				watchChar,watchHum=c,h
+				if godOn then task.spawn(setupChar,c) end
+			end
+		end
+	end)
+
+	task.spawn(function()
+		while main.Parent do
+			if godOn or (Frame.Visible and P.page.Visible) then
+				scanHp()
+				local names={}
+				for i=1,math.min(3,#hpSources) do
+					local r=hpSources[i]
+					names[i]=(r.kind=="value") and r.obj.Name or r.name
+				end
+				srcLbl.Text="Sumber HP: Humanoid"..((#names>0) and (" + "..table.concat(names,", ")) or " saja")
+			end
+			task.wait(godOn and 2 or 3)
+		end
+	end)
+end)
+
+-- =====================================================================
+-- TAB TELE
+-- =====================================================================
+section("TELE",function()
+	local P=addTab("Tele","TELEPORT")
+	local selected=nil
+	local mode="normal"
+	local stickConn=nil
+	local autoAtk=false
+	local itemBtns={}
+
+	local selLbl=P.info("Target: belum dipilih",24)
+	local list=P.container()
+	local modeRow=P.row(30)
+	P.rowLabel(modeRow,"Mode")
+	local modeBtn=P.rowButton(modeRow,"BIASA",110)
+	local goBtn=P.button("TELEPORT",nil,Color3.fromRGB(150,80,20))
+	P.toggle("autoAtk","AUTO SERANG",false,function(on) autoAtk=on end)
+
+	local function updateGoText()
+		if mode=="normal" then
+			goBtn.Text="TELEPORT"
+			goBtn.BackgroundColor3=Color3.fromRGB(150,80,20)
+		elseif stickConn then
+			goBtn.Text="BERHENTI NEMPEL"
+			goBtn.BackgroundColor3=Color3.fromRGB(170,50,30)
+		else
+			goBtn.Text="MULAI NEMPEL"
+			goBtn.BackgroundColor3=Color3.fromRGB(120,80,160)
+		end
+	end
+	local function stopStick()
+		if stickConn then stickConn:Disconnect(); stickConn=nil end
+		updateGoText()
+	end
+	local function highlight()
+		for pl,b in pairs(itemBtns) do
+			local on=(pl==selected)
+			b.BackgroundColor3=on and ACC or ROW
+			b.TextColor3=on and BLACK or TXT
+		end
+		selLbl.Text=selected and ("Target: "..selected.DisplayName) or "Target: belum dipilih"
+	end
+	local function refreshList()
+		for _,c in ipairs(list:GetChildren()) do
+			if c:IsA("TextButton") then c:Destroy() end
+		end
+		itemBtns={}
+		if selected and not selected.Parent then selected=nil; stopStick() end
+		for _,pl in ipairs(Players:GetPlayers()) do
+			if pl~=lp then
+				local b=new("TextButton",{
+					Size=UDim2.new(1,0,0,26),BackgroundColor3=ROW,Font=FONT,
+					Text=pl.DisplayName.." (@"..pl.Name..")",TextColor3=TXT,TextSize=12,
+					TextTruncate=Enum.TextTruncate.AtEnd,AutoButtonColor=false,
+				},list)
+				corner(b,6)
+				b.MouseButton1Click:Connect(function()
+					selected=pl
+					highlight()
+				end)
+				itemBtns[pl]=b
+			end
+		end
+		highlight()
+	end
+	onPlayers(refreshList)
+
+	modeBtn.MouseButton1Click:Connect(function()
+		stopStick()
+		mode=(mode=="normal") and "nempel" or "normal"
+		modeBtn.Text=(mode=="normal") and "BIASA" or "NEMPEL"
+		updateGoText()
+	end)
+
+	goBtn.MouseButton1Click:Connect(function()
+		if not selected or not selected.Parent then
+			notify("Pilih target","Tap nama pemain di daftar dulu")
+			return
+		end
+		if mode=="normal" then
+			local my,r=getHRP(lp),getHRP(selected)
+			if my and r then
+				my.CFrame=r.CFrame*CFrame.new(0,0,3)
+			else
+				notify("Gagal","Karakter target belum ada")
+			end
+		else
+			if stickConn then stopStick() return end
+			stickConn=RunService.Heartbeat:Connect(function()
+				if not selected or not selected.Parent then stopStick() return end
+				local my,r=getHRP(lp),getHRP(selected)
+				if not my or not r then return end
+				my.CFrame=CFrame.new(r.Position-r.CFrame.LookVector*3,r.Position)
+				if autoAtk then fireTool(r) end
+			end)
+			updateGoText()
+		end
+	end)
+end)
+
+-- =====================================================================
+-- TAB ESP (pemain)
+-- =====================================================================
+section("ESP",function()
+	local P=addTab("Esp","ESP PEMAIN")
+	local espMaster=false
+	local HIDE_TEAMS={Spectator=true}
+	local espOver,espOff,espObjs,espRows={},{},{},{}
+
+	P.toggle("espPlayer","ESP PEMAIN",false,function(on)
+		espMaster=on
+		if not on then
+			for pl in pairs(espObjs) do
+				local o=espObjs[pl]
+				pcall(function() o.hl:Destroy() end)
+				pcall(function() o.bb:Destroy() end)
+				espObjs[pl]=nil
+			end
+		end
+	end)
+	local colPlayer=P.colors("colPlayer","Warna semua pemain",5)
+	local colKiller=P.colors("colKiller","Warna killer",1)
+	P.info("Per pemain: kotak warna = ganti warna, ON/OFF = tampil/sembunyi. ESP hanya muncul saat pemain di balik tembok.",52)
+	local list=P.container()
+
+	local function isKiller(pl)
+		return pl.Team~=nil and pl.Team.Name=="Killer"
+	end
+	local function teamHidden(pl)
+		return pl.Team~=nil and HIDE_TEAMS[pl.Team.Name]==true
+	end
+	local function effColor(pl)
+		if espOver[pl] then return PALETTE[espOver[pl]].c end
+		if isKiller(pl) then return PALETTE[colKiller.value].c end
+		return PALETTE[colPlayer.value].c
+	end
+
+	local function paintRows()
+		for pl,r in pairs(espRows) do
+			local on=not espOff[pl]
+			r.chip.BackgroundColor3=effColor(pl)
+			r.tog.Text=on and "ON" or "OFF"
+			r.tog.BackgroundColor3=on and ACC or OFFBG
+			r.tog.TextColor3=on and BLACK or DIM
+			r.name.Text=(espOver[pl] and "* " or "")..pl.DisplayName
+		end
+	end
+
+	local function buildList()
+		for _,c in ipairs(list:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
+		end
+		espRows={}
+		for pl in pairs(espOver) do if not pl.Parent then espOver[pl]=nil end end
+		for pl in pairs(espOff) do if not pl.Parent then espOff[pl]=nil end end
+		for _,pl in ipairs(Players:GetPlayers()) do
+			if pl~=lp then
+				local row=new("Frame",{Size=UDim2.new(1,0,0,28),BackgroundColor3=ROW},list)
+				corner(row,6)
+				local chip=new("TextButton",{
+					Position=UDim2.new(0,6,0.5,-10),Size=UDim2.new(0,20,0,20),Text="",AutoButtonColor=false,
+				},row)
+				corner(chip,5)
+				local name=new("TextLabel",{
+					BackgroundTransparency=1,Position=UDim2.new(0,32,0,0),Size=UDim2.new(1,-96,1,0),
+					Font=FONT,Text="",TextColor3=TXT,TextSize=12,
+					TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,
+				},row)
+				local tog=new("TextButton",{
+					Position=UDim2.new(1,-56,0.5,-10),Size=UDim2.new(0,50,0,20),
+					Font=FONTB,Text="ON",TextSize=12,AutoButtonColor=true,
+				},row)
+				corner(tog,5)
+				chip.MouseButton1Click:Connect(function()
+					local cur=espOver[pl] or 0
+					espOver[pl]=(cur%#PALETTE)+1
+					paintRows()
+				end)
+				tog.MouseButton1Click:Connect(function()
+					espOff[pl]=(not espOff[pl]) or nil
+					paintRows()
+				end)
+				espRows[pl]={chip=chip,name=name,tog=tog}
+			end
+		end
+		paintRows()
+	end
+	onPlayers(buildList)
+
+	local function removeEsp(pl)
+		local o=espObjs[pl]
+		if o then
+			pcall(function() o.hl:Destroy() end)
+			pcall(function() o.bb:Destroy() end)
+			espObjs[pl]=nil
+		end
+	end
+
+	local espParams=RaycastParams.new()
+	espParams.FilterType=Enum.RaycastFilterType.Exclude
+	local function isHidden(char,hrp)
+		local cam=workspace.CurrentCamera
+		if not cam then return false end
+		local ign={char}
+		if lp.Character then table.insert(ign,lp.Character) end
+		espParams.FilterDescendantsInstances=ign
+		local origin=cam.CFrame.Position
+		local points={hrp.Position}
+		local head=char:FindFirstChild("Head")
+		if head then table.insert(points,head.Position) end
+		for _,pos in ipairs(points) do
+			if not workspace:Raycast(origin,pos-origin,espParams) then return false end
+		end
+		return true
+	end
+
+	local function applyEsp(pl,myHrp)
+		local char=pl.Character
+		local hrp=char and char:FindFirstChild("HumanoidRootPart")
+		if not (espMaster and not espOff[pl] and not teamHidden(pl) and hrp) then
+			removeEsp(pl)
+			return
+		end
+		local o=espObjs[pl]
+		if o and o.char~=char then removeEsp(pl); o=nil end
+		if not o then
+			local hl=new("Highlight",{
+				Adornee=char,FillTransparency=0.6,OutlineTransparency=0,
+				DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
+			},espFolder)
+			local bb=new("BillboardGui",{
+				Adornee=hrp,Size=UDim2.new(0,120,0,18),
+				StudsOffset=Vector3.new(0,3.4,0),AlwaysOnTop=true,ResetOnSpawn=false,
+			},espFolder)
+			local lbl=new("TextLabel",{
+				BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
+				Font=FONTB,TextSize=12,TextStrokeTransparency=0.4,
+			},bb)
+			o={hl=hl,bb=bb,lbl=lbl,char=char}
+			espObjs[pl]=o
+		end
+		local col=effColor(pl)
+		o.hl.FillColor=col
+		o.hl.OutlineColor=col
+		o.lbl.TextColor3=col
+		o.hl.Enabled=isHidden(char,hrp)
+		local dist=myHrp and (hrp.Position-myHrp.Position).Magnitude or 0
+		o.lbl.Text=string.format("%s [%dm]",pl.DisplayName,dist)
+	end
+
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.3)
+			if P.page.Visible then paintRows() end
+			if espMaster then
+				local myHrp=getHRP(lp)
+				for _,pl in ipairs(Players:GetPlayers()) do
+					if pl~=lp then applyEsp(pl,myHrp) end
+				end
+				for pl in pairs(espObjs) do
+					if not pl.Parent then removeEsp(pl) end
+				end
+			end
+		end
+	end)
+end)
+
+-- =====================================================================
+section("SPEED",function()
+	local P=addTab("Speed","SPEED")
+	local speedPct=0
+	local speedOn=false
+	local autoKiller,autoWin=false,false
+	local boostNow=true
+	local knocked=false
+	local baseWS,ourWrite,hookedHum,wsConn
+
+	local function curHum()
+		local c=lp.Character
+		return c and c:FindFirstChildOfClass("Humanoid")
+	end
+
+	-- ===== label + slider (tambahan 0-100%) =====
+	local row=P.row(54)
+	local lbl=new("TextLabel",{
+		BackgroundTransparency=1,Position=UDim2.new(0,8,0,4),Size=UDim2.new(1,-16,0,18),
+		Font=FONTB,TextSize=13,TextColor3=TXT,TextXAlignment=Enum.TextXAlignment.Left,Text="",
+		TextTruncate=Enum.TextTruncate.AtEnd,
+	},row)
+	local slideBtn=new("TextButton",{
+		BackgroundTransparency=1,Text="",AutoButtonColor=false,
+		Position=UDim2.new(0,8,0,24),Size=UDim2.new(1,-16,0,22),
+	},row)
+	local bar=new("Frame",{
+		AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(0,0,0.5,0),Size=UDim2.new(1,0,0,8),
+		BackgroundColor3=OFFBG,BorderSizePixel=0,
+	},slideBtn)
+	corner(bar,4)
+	local fill=new("Frame",{Size=UDim2.new(0,0,1,0),BackgroundColor3=ACC,BorderSizePixel=0},bar)
+	corner(fill,4)
+	local knob=new("Frame",{
+		AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0,0,0.5,0),Size=UDim2.new(0,18,0,18),
+		BackgroundColor3=TXT,BorderSizePixel=0,ZIndex=2,
+	},slideBtn)
+	corner(knob,9)
+
+	local function refreshLbl()
+		local h=curHum()
+		local st=h and h:GetState().Name or "-"
+		local status
+		if not speedOn then status="mati"
+		elseif knocked then status="kenok"
+		elseif not boostNow then status="menunggu pemicu"
+		else status="aktif" end
+		lbl.Text=string.format("Tambahan speed: %d%% [%s] state: %s",speedPct,status,st)
+	end
+	local function paintSpeed()
+		local r=speedPct/100
+		fill.Size=UDim2.new(r,0,1,0)
+		knob.Position=UDim2.new(r,0,0.5,0)
+		refreshLbl()
+	end
+	local function setSpeedPct(v,quiet)
+		speedPct=math.clamp(math.floor(v/5+0.5)*5,0,100)
+		paintSpeed()
+		if not quiet then queueSave() end
+	end
+
+	local dragging=false
+	local function setFromX(x)
+		local r=math.clamp((x-slideBtn.AbsolutePosition.X)/slideBtn.AbsoluteSize.X,0,1)
+		setSpeedPct(r*100,false)
+	end
+	slideBtn.InputBegan:Connect(function(i)
+		if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+			dragging=true
+			setFromX(i.Position.X)
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+			setFromX(i.Position.X)
+		end
+	end))
+	track(UIS.InputEnded:Connect(function(i)
+		if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+			dragging=false
+		end
+	end))
+	paintSpeed()
+	controls.speedPct={default=0,get=function() return speedPct end,set=function(v) setSpeedPct(tonumber(v) or 0,true) end}
+
+	-- ===== toggle =====
+	-- ===== deteksi kenok =====
+	local KNOCK_STATES={Enum.HumanoidStateType.Physics,Enum.HumanoidStateType.Ragdoll,
+		Enum.HumanoidStateType.PlatformStanding,Enum.HumanoidStateType.FallingDown,Enum.HumanoidStateType.Dead}
+	local KNOCK_ATTRS={"Downed","Knocked","IsDowned","IsKnocked","Incapacitated","Crawling","Down"}
+	local function isKnocked(ch,h)
+		if not h or h.Health<=0 then return true end
+		local st=h:GetState()
+		for _,x in ipairs(KNOCK_STATES) do
+			if st==x then return true end
+		end
+		for _,a in ipairs(KNOCK_ATTRS) do
+			if (ch and ch:GetAttribute(a)==true) or h:GetAttribute(a)==true then return true end
+		end
+		return false
+	end
+
+	-- ===== indikator % milik game (kanan atas) =====
+	-- Indikator game bisa disembunyikan saat buff tidak aktif, jadi dicari walaupun tidak terlihat.
+	-- Saat boost script aktif, parent-nya ditampilkan; saat mati, dikembalikan seperti semula.
+	local indicator=nil
+	local lastFind=0
+	local changedVis={}
+	local function findIndicator()
+		local pg=lp:FindFirstChildOfClass("PlayerGui")
+		local cam=workspace.CurrentCamera
+		if not pg or not cam then return nil end
+		local vp=cam.ViewportSize
+		for _,d in ipairs(pg:GetDescendants()) do
+			if (d:IsA("TextLabel") or d:IsA("TextButton")) and not d:IsDescendantOf(main)
+				and string.match(d.Text,"^%d+%%$")
+				and d.AbsolutePosition.X>vp.X*0.6 and d.AbsolutePosition.Y<vp.Y*0.3 then
+				return d
+			end
+		end
+		return nil
+	end
+	local function showChain(obj)
+		local cur=obj
+		while cur and cur~=lp.PlayerGui do
+			if cur:IsA("ScreenGui") then
+				if changedVis[cur]==nil then changedVis[cur]=cur.Enabled end
+				cur.Enabled=true
+			elseif cur:IsA("GuiObject") then
+				if changedVis[cur]==nil then changedVis[cur]=cur.Visible end
+				cur.Visible=true
+			end
+			cur=cur.Parent
+		end
+	end
+	local function restoreChain()
+		for obj,v in pairs(changedVis) do
+			pcall(function()
+				if obj:IsA("ScreenGui") then obj.Enabled=v else obj.Visible=v end
+			end)
+		end
+		changedVis={}
+	end
+	local function syncIndicator(active)
+		if not active then
+			if next(changedVis) then restoreChain() end
+			return
+		end
+		if not indicator or not indicator.Parent then
+			if os.clock()-lastFind<1 then return end
+			lastFind=os.clock()
+			indicator=findIndicator()
+			if not indicator then return end
+		end
+		showChain(indicator)
+		local want=speedPct.."%"
+		if indicator.Text~=want then indicator.Text=want end
+	end
+
+	-- ===== kecepatan lewat WalkSpeed =====
+	-- Script hanya menulis WalkSpeed saat nilainya berbeda, dan hanya saat game mengubah nilainya.
+	-- Saat kenok, speed dibiarkan normal dan tidak ditambah lagi.
+	local function currentBonus()
+		if not speedOn or knocked or not boostNow then return 0 end
+		return speedPct
+	end
+	local function applyTarget()
+		if knocked then return end
+		local h=curHum()
+		if not h or not baseWS then return end
+		local t=baseWS*(1+currentBonus()/100)
+		if math.abs(h.WalkSpeed-t)>0.05 then
+			ourWrite=t
+			h.WalkSpeed=t
+		end
+	end
+	local function hookHum(h)
+		if wsConn then
+			wsConn:Disconnect()
+			wsConn=nil
+		end
+		hookedHum=h
+		if not h then return end
+		wsConn=h:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+			if not speedOn then return end
+			local v=h.WalkSpeed
+			if ourWrite and math.abs(v-ourWrite)<0.05 then return end
+			if not knocked and v>0 then baseWS=v end
+			applyTarget()
+		end)
+	end
+
+	P.toggle("speedOn","SPEED ON (otomatis normal saat kenok)",false,function(on)
+		speedOn=on
+		knocked=false
+		local h=curHum()
+		if on then
+			if h and h.WalkSpeed>0 then baseWS=h.WalkSpeed end
+			applyTarget()
+		else
+			if h and baseWS then
+				ourWrite=baseWS
+				h.WalkSpeed=baseWS
+			end
+		end
+		refreshLbl()
+	end)
+	P.toggle("autoKiller","AUTO SPEED saat killer dekat (40 stud)",false,function(on)
+		autoKiller=on
+	end)
+	P.toggle("autoWin","AUTO SPEED dekat jendela (8 stud)",false,function(on)
+		autoWin=on
+	end)
+
+	-- ===== pemicu + pembaruan (tiap 0.2 detik) =====
+	local winParts={}
+	local lastWinScan=0
+	local function isWinName(n)
+		local l=string.lower(n)
+		return string.find(l,"window",1,true)~=nil or string.find(l,"jendela",1,true)~=nil
+	end
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.2)
+			local h=curHum()
+			if h~=hookedHum then
+				hookHum(h)
+				baseWS=nil
+				ourWrite=nil
+			end
+			if h then
+				local k=isKnocked(lp.Character,h)
+				if k~=knocked then
+					knocked=k
+					if k and speedOn and baseWS then
+						ourWrite=baseWS
+						h.WalkSpeed=baseWS
+					end
+				end
+				if speedOn and not knocked and not baseWS and h.WalkSpeed>0 then
+					baseWS=h.WalkSpeed
+				end
+			end
+
+			local ch=lp.Character
+			local hrp=ch and ch:FindFirstChild("HumanoidRootPart")
+			local killerNear,winNear=false,false
+			if hrp and autoKiller then
+				for _,pl in ipairs(Players:GetPlayers()) do
+					if pl~=lp and pl.Team and string.find(string.lower(pl.Team.Name),"killer",1,true) then
+						local h2=getHRP(pl)
+						if h2 and (h2.Position-hrp.Position).Magnitude<=40 then killerNear=true break end
+					end
+				end
+			end
+			if hrp and autoWin then
+				if os.clock()-lastWinScan>2 then
+					lastWinScan=os.clock()
+					winParts={}
+					for _,d in ipairs(workspace:GetDescendants()) do
+						if d:IsA("BasePart") and (isWinName(d.Name) or (d.Parent and isWinName(d.Parent.Name))) then
+							winParts[#winParts+1]=d
+						end
+					end
+				end
+				for _,w in ipairs(winParts) do
+					if w.Parent and (w.Position-hrp.Position).Magnitude<=8 then winNear=true break end
+				end
+			end
+			boostNow=(not autoKiller and not autoWin) or (autoKiller and killerNear) or (autoWin and winNear)
+
+			if speedOn then applyTarget() end
+			refreshLbl()
+			syncIndicator(speedOn and not knocked and boostNow and speedPct>0)
+		end
+	end)
+end)
+
+-- =====================================================================
+-- TAB AIM : SILENT AIM (otomatis survivor/killer) + PELACAK KENA
+-- Tab dibuat di sini supaya urutan menu tetap. Isinya dibangun di bagian
+-- paling bawah script, supaya error di AIM tidak menghentikan panel.
+-- =====================================================================
+local AimTab=addTab("Aim","SILENT AIM")
+
+local function buildAim(P)
+	local ST=G.GodAimST
+	if not ST then ST={hooked=false}; G.GodAimST=ST end
+	ST.gen=(ST.gen or 0)+1
+	local gen=ST.gen
+	ST.on=false
+	ST.onToggle=false
+	ST.aimHead=false
+	ST.forceTouch=false
+	-- daftar remote direset tiap script dijalankan (tidak membawa sisa sesi lama)
+	ST.seen={}
+	ST.count=0
+	ST.partSet=ST.partSet or {}
+	ST.charSet=ST.charSet or {}
+	ST.pending=ST.pending or {}
+	ST.tally=ST.tally or {}      -- hasil tiap kecepatan peluru yang diuji: {h=kena, m=meleset}
+	ST.targetPart,ST.targetChar,ST.targetPlr=nil,nil,nil
+	ST.myPos=nil
+	ST.role="SURVIVOR"
+	if ST.predict==nil then ST.predict=true end
+	if ST.filterShot==nil then ST.filterShot=true end
+
+	local canHook=(hookmetamethod and newcclosure and getnamecallmethod and checkcaller) and true or false
+	local MAX_LEAD=0.6
+	local MAX_REMOTES=40
+	local TOUCH_REACH=15
+	local SHOT_TIMEOUT=1.2                              -- detik: lewat dari ini dihitung meleset
+	local SPEEDS={60,90,120,160,220,300}                -- kecepatan peluru (stud/detik) yang diuji otomatis
+	local KILLER_WORDS={"killer"}
+	local SHOT_WORDS={
+		"hit","attack","fire","shoot","shot","damage","gun","bullet","projectile","ray","aim",
+		"stab","slash","swing","throw","spear","lempar","tombak","javelin","lance","harpoon",
+		"melee","punch","release","launch","impale","cast","strike",
+	}
+
+	local function looksLikeShot(name)
+		local l=string.lower(name)
+		for _,w in ipairs(SHOT_WORDS) do
+			if string.find(l,w,1,true) then return true end
+		end
+		return false
+	end
+
+	local function sigOf(n,args)
+		local parts,hasDir={},false
+		for i=1,math.min(n,6) do
+			local v=args[i]
+			local t=typeof(v)
+			local s
+			if t=="Vector3" then s="V3"; hasDir=true
+			elseif t=="CFrame" then s="CF"; hasDir=true
+			elseif t=="Instance" then
+				if ST.partSet[v] or ST.charSet[v] then s="Musuh"; hasDir=true else s="Inst" end
+			elseif t=="number" then s="Num"
+			elseif t=="string" then s="Str"
+			elseif t=="boolean" then s="Bool"
+			elseif t=="table" then s="Tbl"
+			else s=t end
+			parts[#parts+1]=s
+		end
+		local s=table.concat(parts,",")
+		if s=="" then s="-" end
+		return s,hasDir
+	end
+
+	-- dada (UpperTorso) default; kepala kalau BIDIK KEPALA dinyalakan
+	local function aimPart(ch)
+		if ST.aimHead then
+			local h=ch:FindFirstChild("Head")
+			if h then return h end
+		end
+		return ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso") or ch:FindFirstChild("HumanoidRootPart")
+	end
+
+	-- posisi bidik: prediksi gerak dengan waktu tempuh = jarak / kecepatan peluru
+	local function aimPoint(part,speed)
+		local pos=part.Position
+		if ST.predict then
+			local o=ST.myPos or pos
+			local t=math.min((pos-o).Magnitude/(speed or 120),MAX_LEAD)
+			local v=part.AssemblyLinearVelocity
+			pos=pos+Vector3.new(v.X,0,v.Z)*t
+		end
+		return pos
+	end
+
+	-- pilih kecepatan peluru yang paling sering kena (sambil menguji yang belum cukup dicoba)
+	local function pickSpeed()
+		local best,bestScore=SPEEDS[1],-1
+		for _,c in ipairs(SPEEDS) do
+			local s=ST.tally[c] or {h=0,m=0}
+			local n=s.h+s.m
+			if n<3 then return c end
+			local score=(s.h+1)/(n+2)
+			if score>bestScore then best,bestScore=c,score end
+		end
+		return best
+	end
+	local function bestSpeedInfo()
+		local best,bestScore,bh,bn=nil,-1,0,0
+		for _,c in ipairs(SPEEDS) do
+			local s=ST.tally[c]
+			if s and s.h+s.m>0 then
+				local score=(s.h+1)/(s.h+s.m+2)
+				if score>bestScore then best,bestScore,bh,bn=c,score,s.h,s.h+s.m end
+			end
+		end
+		return best,bh,bn
+	end
+
+	-- ubah 1 argumen supaya mengarah ke titik bidik
+	local function fix(v,depth,pos,me)
+		local t=typeof(v)
+		if t=="Vector3" then
+			local m=v.Magnitude
+			if m>0.5 and m<1.5 then
+				local d=pos-me
+				if d.Magnitude>0.1 then return d.Unit,true end
+			elseif (v-me).Magnitude>6 then
+				return pos,true
+			end
+		elseif t=="CFrame" then
+			local p=v.Position
+			if (p-me).Magnitude<=6 then
+				if (pos-p).Magnitude>0.1 then return CFrame.lookAt(p,pos),true end
+			else
+				return CFrame.new(pos)*(v-p),true
+			end
+		elseif t=="Instance" then
+			if ST.partSet[v] and v~=ST.targetPart then return ST.targetPart,true end
+			if ST.charSet[v] and v~=ST.targetChar then return ST.targetChar,true end
+		elseif t=="table" and depth<1 then
+			local copy,ch={},false
+			for k,x in pairs(v) do
+				local nx,c=fix(x,depth+1,pos,me)
+				if c then copy[k]=nx; ch=true else copy[k]=x end
+			end
+			if ch then return copy,true end
+		end
+		return v,false
+	end
+
+	-- remote yang ON di screenshot = ON otomatis; remote lain OFF
+	local REMOTE_ON={"updatecharacterlook","getping","spearstate","spearthrow","basicattack"}
+	local function presetUse(name)
+		local l=string.lower(name)
+		for _,w in ipairs(REMOTE_ON) do
+			if string.find(l,w,1,true) then return true end
+		end
+		return false
+	end
+
+	local function process(self,n,args)
+		local name=self.Name
+		if type(name)~="string" then return false end
+		local rec=ST.seen[name]
+		if not rec then
+			if ST.filterShot and not looksLikeShot(name) then return false end
+			if ST.count>=MAX_REMOTES then return false end
+			ST.count=ST.count+1
+			rec={n=0,mod=0,hit=0,sig="",hasDir=false,order=ST.count}
+			ST.seen[name]=rec
+		end
+		rec.n=rec.n+1
+		if rec.n<=3 or rec.sig=="" then
+			local s,h=sigOf(n,args)
+			rec.sig=s
+			rec.hasDir=rec.hasDir or h
+		end
+		if rec.use==nil then rec.use=presetUse(name) end
+		if not ST.on or not rec.use then return false end
+		local tp=ST.targetPart
+		if not (tp and tp.Parent) then return false end
+		local spd=pickSpeed()
+		local pos=aimPoint(tp,spd)
+		local me=ST.myPos or pos
+		local changed=false
+		for i=1,n do
+			local nv,c=fix(args[i],0,pos,me)
+			if c then args[i]=nv; changed=true end
+		end
+		if changed then
+			rec.mod=rec.mod+1
+			local pl=ST.targetPlr
+			local ch=pl and pl.Character
+			local hum=ch and ch:FindFirstChildOfClass("Humanoid")
+			if hum then
+				table.insert(ST.pending,{rec=rec,hum=hum,hp=hum.Health,t=os.clock(),spd=spd})
+			end
+		end
+		return changed
+	end
+	ST.proc=process
+
+	-- hook dipasang HANYA saat SILENT AIM dinyalakan
+	local function installHook()
+		if ST.hooked then return true end
+		if not canHook then return false end
+		local ok=pcall(function()
+			local old
+			old=hookmetamethod(game,"__namecall",newcclosure(function(self,...)
+				local method=getnamecallmethod()
+				if (method=="FireServer" or method=="InvokeServer") and not checkcaller() and ST.proc then
+					local n=select("#",...)
+					local args={...}
+					local okp,changed=pcall(ST.proc,self,n,args)
+					if setnamecallmethod then setnamecallmethod(method) end
+					if okp and changed then
+						return old(self,table.unpack(args,1,n))
+					end
+				end
+				return old(self,...)
+			end))
+		end)
+		ST.hooked=ok
+		return ok
+	end
+
+	-- ===== peran & target =====
+	local function teamHas(pl,words)
+		local tn=pl.Team and string.lower(pl.Team.Name)
+		if not tn then return false end
+		for _,w in ipairs(words) do
+			if string.find(tn,w,1,true) then return true end
+		end
+		return false
+	end
+	local function isAlive(pl)
+		local c=pl.Character
+		local h=c and c:FindFirstChildOfClass("Humanoid")
+		return h~=nil and h.Health>0
+	end
+	-- survivor -> target killer; killer -> target survivor
+	local function isEnemy(pl)
+		if pl==lp or not isAlive(pl) or teamHas(pl,{"spectat"}) then return false end
+		-- belum ada tim (atau tim belum terisi): semua pemain hidup dianggap target
+		if lp.Team==nil or pl.Team==nil then return true end
+		if teamHas(lp,KILLER_WORDS) then return not teamHas(pl,KILLER_WORDS) end
+		return teamHas(pl,KILLER_WORDS)
+	end
+
+	-- pilih musuh yang paling dekat dengan TENGAH LAYAR; kalau tidak ada di layar, pilih yang terdekat
+	local function updateTarget()
+		local cam=workspace.CurrentCamera
+		local me=lp.Character
+		local head=me and (me:FindFirstChild("Head") or me:FindFirstChild("HumanoidRootPart"))
+		local origin=head and head.Position or (cam and cam.CFrame.Position)
+		ST.myPos=origin
+		ST.role=teamHas(lp,KILLER_WORDS) and "KILLER" or "SURVIVOR"
+		ST.on=ST.onToggle and true or false
+
+		local center=Vector2.new(0,0)
+		if cam then
+			local vp=cam.ViewportSize
+			center=Vector2.new(vp.X/2,vp.Y/2)
+		end
+
+		local partSet,charSet={},{}
+		local bestPart,bestChar,bestPl,bestD,bestScore=nil,nil,nil,nil,math.huge
+		for _,pl in ipairs(Players:GetPlayers()) do
+			if isEnemy(pl) and pl.Character then
+				local ch=pl.Character
+				charSet[ch]=true
+				for _,d in ipairs(ch:GetDescendants()) do
+					if d:IsA("BasePart") then partSet[d]=true end
+				end
+				local part=aimPart(ch)
+				if part and origin and cam then
+					local d3=(part.Position-origin).Magnitude
+					local sp,on=cam:WorldToViewportPoint(part.Position)
+					local score
+					if on and sp.Z>0 then
+						score=(Vector2.new(sp.X,sp.Y)-center).Magnitude
+					else
+						score=100000+d3
+					end
+					if score<bestScore then
+						bestPart,bestChar,bestPl,bestD,bestScore=part,ch,pl,d3,score
+					end
+				end
+			end
+		end
+		ST.partSet,ST.charSet=partSet,charSet
+		ST.targetPart,ST.targetChar,ST.targetPlr=bestPart,bestChar,bestPl
+		ST.targetDist=bestD
+	end
+
+	-- ===== PELACAK KENA =====
+	-- Tembakan dianggap KENA kalau darah target turun dalam SHOT_TIMEOUT detik.
+	-- Dari hasil ini, kecepatan peluru yang paling akurat dipilih otomatis.
+	local function resolveHit(p)
+		p.rec.hit=(p.rec.hit or 0)+1
+		local s=ST.tally[p.spd] or {h=0,m=0}
+		s.h=s.h+1
+		ST.tally[p.spd]=s
+	end
+	local function resolveMiss(p)
+		local s=ST.tally[p.spd] or {h=0,m=0}
+		s.m=s.m+1
+		ST.tally[p.spd]=s
+	end
+	task.spawn(function()
+		while main.Parent and ST.gen==gen do
+			task.wait(0.03)
+			local now=os.clock()
+			local i=1
+			while i<=#ST.pending do
+				local p=ST.pending[i]
+				if not p.hum.Parent then
+					table.remove(ST.pending,i)
+					resolveMiss(p)
+				elseif p.hum.Health<p.hp then
+					table.remove(ST.pending,i)
+					resolveHit(p)
+					for _,q in ipairs(ST.pending) do
+						if q.hum==p.hum then q.hp=p.hum.Health end
+					end
+				elseif now-p.t>SHOT_TIMEOUT then
+					table.remove(ST.pending,i)
+					resolveMiss(p)
+				else
+					i=i+1
+				end
+			end
+		end
+	end)
+
+	-- ===== PAKSA KENA (sentuhan, jarak dekat) =====
+	task.spawn(function()
+		while main.Parent and ST.gen==gen do
+			task.wait(0.05)
+			if ST.on and ST.forceTouch and firetouchinterest and ST.targetPart and ST.targetPart.Parent
+			and (ST.targetDist or math.huge)<=TOUCH_REACH then
+				local ch=lp.Character
+				local tool=ch and ch:FindFirstChildOfClass("Tool")
+				local handle=tool and tool:FindFirstChild("Handle")
+				if handle then
+					pcall(function()
+						firetouchinterest(ST.targetPart,handle,0)
+						firetouchinterest(ST.targetPart,handle,1)
+					end)
+				end
+			end
+		end
+	end)
+
+	-- ===== daftar remote =====
+	local rowBtns={}
+	local listBox=P.container()
+	local function refreshRows()
+		for name,rec in pairs(ST.seen) do
+			local b=rowBtns[name]
+			if not b then
+				b=new("TextButton",{
+					Size=UDim2.new(1,0,0,24),Font=FONT,TextSize=11,LayoutOrder=rec.order,
+					TextTruncate=Enum.TextTruncate.AtEnd,AutoButtonColor=false,
+				},listBox)
+				corner(b,6)
+				b.MouseButton1Click:Connect(function()
+					local r=ST.seen[name]
+					if r then
+						if r.use==nil then r.use=true else r.use=not r.use end
+					end
+					pcall(refreshRows)
+				end)
+				rowBtns[name]=b
+			end
+			local u=rec.use
+			local tag=(u==nil) and "[..] " or (u and "[ON] " or "[OFF] ")
+			local sig=(rec.sig~="") and rec.sig or "?"
+			b.Text=tag..name.."  "..sig.."  tembak "..(rec.mod or 0).." kena "..(rec.hit or 0)
+			b.BackgroundColor3=u and ACC or ROW
+			b.TextColor3=u and BLACK or DIM
+		end
+	end
+	local function clearRows()
+		for _,b in pairs(rowBtns) do pcall(function() b:Destroy() end) end
+		rowBtns={}
+	end
+
+	-- ===== status =====
+	local noteText,noteUntil=nil,0
+	local function note(t) noteText=t; noteUntil=os.clock()+3 end
+
+	local function computeVerdict()
+		if not canHook then return "Executor tidak support hookmetamethod. Silent aim tidak bisa." end
+		if not ST.hooked then return "Hook belum aktif. Nyalakan SILENT AIM untuk memasang hook." end
+		if not ST.on then return "Nyalakan SILENT AIM untuk mulai." end
+		local mods,hits,dirName=0,0,nil
+		for name,rec in pairs(ST.seen) do
+			if rec.n>0 and (rec.use or looksLikeShot(name)) then
+				if rec.hasDir and not dirName then dirName=name end
+				if rec.use then
+					mods=mods+(rec.mod or 0)
+					hits=hits+(rec.hit or 0)
+				end
+			end
+		end
+		if mods>0 then
+			local best,bh,bn=bestSpeedInfo()
+			local info=best and (" | kecepatan terbaik "..best.." ("..bh.."/"..bn..")") or ""
+			if hits==0 and mods>=5 then
+				return "Belum ada yang kena dari "..mods.." tembakan"..info..". Server mungkin menghitung kena sendiri."
+			end
+			return "Kena "..hits.." dari "..mods.." tembakan"..info.."."
+		end
+		if dirName then return "BISA: "..dirName.." mengirim arah. Tembak sekali lagi dan pastikan remote [ON]." end
+		if not next(ST.seen) then return "Tembak / lempar sekali. Remote akan muncul di daftar." end
+		return "TIDAK BISA: serangan tidak mengirim arah lewat remote (server/hitbox yang hitung)."
+	end
+
+	-- ===== kontrol =====
+	P.toggle("silentOn","SILENT AIM",false,function(on)
+		ST.onToggle=on
+		if on then
+			local ok=installHook()
+			if not ok then notify("Silent aim","Hook gagal / tidak didukung executor") end
+		end
+	end)
+	P.toggle("silentHead","BIDIK KEPALA (OFF = dada)",false,function(on)
+		ST.aimHead=on
+	end)
+	P.toggle("silentPred","PREDIKSI GERAK",true,function(on)
+		ST.predict=on
+	end)
+	P.toggle("silentFilter","FILTER NAMA TEMBAK",true,function(on)
+		ST.filterShot=on
+	end)
+	P.toggle("silentTouch","PAKSA KENA (touch, jarak dekat)",false,function(on)
+		ST.forceTouch=on
+	end)
+	local statusLbl=P.info("Peran: -",24)
+	local verdictLbl=P.info("",62)
+	P.button("CEK TOOL",function()
+		local ch=lp.Character
+		local tool=ch and ch:FindFirstChildOfClass("Tool")
+		if not tool then note("Pegang senjata / tombak dulu, lalu tap CEK TOOL."); return end
+		local found=0
+		for _,d in ipairs(tool:GetDescendants()) do
+			if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+				found=found+1
+				if not ST.seen[d.Name] and ST.count<MAX_REMOTES then
+					ST.count=ST.count+1
+					ST.seen[d.Name]={n=0,mod=0,hit=0,sig="",hasDir=false,order=ST.count,use=presetUse(d.Name)}
+				end
+			end
+		end
+		pcall(refreshRows)
+		if found==0 then note("Tidak ada remote di tool ini. Serang sekali, lalu lihat daftar.") end
+	end,Color3.fromRGB(150,80,20))
+	P.button("HAPUS DAFTAR",function()
+		clearRows()
+		ST.seen={}
+		ST.count=0
+	end,SIDE2)
+
+	-- ===== REMOTE PISTOL/SENJATA OTOMATIS =====
+	-- Setiap 1 detik, remote yang ada di senjata yang sedang dipegang dicatat dan langsung dinyalakan.
+	-- Tidak perlu CEK TOOL atau toggle manual (berguna setelah update game mengubah remote senjata).
+	local function autoHeldTool()
+		local ch=lp.Character
+		local tool=ch and ch:FindFirstChildOfClass("Tool")
+		if not tool then return end
+		for _,d in ipairs(tool:GetDescendants()) do
+			if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+				local rec=ST.seen[d.Name]
+				if not rec and ST.count<MAX_REMOTES then
+					ST.count=ST.count+1
+					rec={n=0,mod=0,hit=0,sig="",hasDir=false,order=ST.count}
+					ST.seen[d.Name]=rec
+				end
+				if rec then rec.use=true end
+			end
+		end
+		pcall(refreshRows)
+	end
+	task.spawn(function()
+		while main.Parent and ST.gen==gen do
+			if ST.on then pcall(autoHeldTool) end
+			task.wait(1)
+		end
+	end)
+
+	-- ===== loop status target =====
+	task.spawn(function()
+		while main.Parent and ST.gen==gen do
+			pcall(updateTarget)
+			if ST.on then
+				if ST.targetPlr then
+					statusLbl.Text=string.format("Peran: %s | ON | Target: %s [%dm]",ST.role,ST.targetPlr.DisplayName,ST.targetDist or 0)
+				else
+					statusLbl.Text=string.format("Peran: %s | ON | tidak ada musuh",ST.role)
+				end
+			else
+				statusLbl.Text=string.format("Peran: %s | OFF",ST.role)
+			end
+			task.wait(0.15)
+		end
+	end)
+	-- ===== loop tampilan =====
+	task.spawn(function()
+		while main.Parent and ST.gen==gen do
+			if P.page.Visible then
+				pcall(refreshRows)
+				if os.clock()<noteUntil and noteText then
+					verdictLbl.Text=noteText
+				else
+					verdictLbl.Text=computeVerdict()
+				end
+			end
+			task.wait(0.5)
+		end
+	end)
+end
+
+-- =====================================================================
+-- TAB LAMPU
+-- =====================================================================
+section("LAMPU",function()
+	local P=addTab("Lampu","LAMPU")
+	local lampOn=false
+	local lampLevel=3
+	local lampSaved=nil
+	local lampAtm=nil
+	local lampCC=nil
+
+	local lvlLbl=P.info("Terang: 3 / 5",24)
+	local pmRow=P.row(34)
+	local minus=new("TextButton",{
+		BackgroundColor3=SIDE2,Position=UDim2.new(0,6,0.5,-12),Size=UDim2.new(0.5,-9,0,24),
+		Font=FONTB,Text="-",TextColor3=TXT,TextSize=20,AutoButtonColor=true,
+	},pmRow)
+	corner(minus,5)
+	local plus=new("TextButton",{
+		BackgroundColor3=ACC,Position=UDim2.new(0.5,3,0.5,-12),Size=UDim2.new(0.5,-9,0,24),
+		Font=FONTB,Text="+",TextColor3=BLACK,TextSize=20,AutoButtonColor=true,
+	},pmRow)
+	corner(plus,5)
+
+	local function applyLamp()
+		local lv=lampLevel
+		local amb=math.min(255,70+lv*30)
+		Lighting.Brightness=1+lv
+		Lighting.ClockTime=14
+		Lighting.FogEnd=1000000
+		Lighting.GlobalShadows=false
+		Lighting.Ambient=Color3.fromRGB(amb,amb,amb)
+		Lighting.OutdoorAmbient=Color3.fromRGB(amb,amb,amb)
+		pcall(function() Lighting.ExposureCompensation=lv*0.4 end)
+		local atm=Lighting:FindFirstChildOfClass("Atmosphere")
+		if atm then atm.Density=0; atm.Haze=0 end
+		if not lampCC or lampCC.Parent~=Lighting then
+			if lampCC then pcall(function() lampCC:Destroy() end) end
+			lampCC=new("ColorCorrectionEffect",{},Lighting)
+		end
+		lampCC.Brightness=0.03*lv
+		lampCC.Contrast=0.05
+	end
+
+	local function setLevel(v)
+		lampLevel=math.clamp(math.floor(tonumber(v) or 3),1,5)
+		lvlLbl.Text=string.format("Terang: %d / 5",lampLevel)
+		if lampOn then applyLamp() end
+		queueSave()
+	end
+	minus.MouseButton1Click:Connect(function() setLevel(lampLevel-1) end)
+	plus.MouseButton1Click:Connect(function() setLevel(lampLevel+1) end)
+	controls.lampLevel={default=3,get=function() return lampLevel end,set=function(v) setLevel(v) end}
+
+	P.toggle("lamp","LAMPU",false,function(on)
+		lampOn=on
+		if on then
+			lampSaved={
+				Brightness=Lighting.Brightness,ClockTime=Lighting.ClockTime,
+				FogEnd=Lighting.FogEnd,GlobalShadows=Lighting.GlobalShadows,
+				Ambient=Lighting.Ambient,OutdoorAmbient=Lighting.OutdoorAmbient,
+			}
+			pcall(function() lampSaved.ExposureCompensation=Lighting.ExposureCompensation end)
+			local atm=Lighting:FindFirstChildOfClass("Atmosphere")
+			lampAtm=atm and {obj=atm,Density=atm.Density,Haze=atm.Haze} or nil
+			applyLamp()
+			notify("LAMPU ON","Layar jadi terang")
+		else
+			if lampSaved then
+				for k,v in pairs(lampSaved) do pcall(function() Lighting[k]=v end) end
+			end
+			if lampAtm and lampAtm.obj and lampAtm.obj.Parent then
+				lampAtm.obj.Density=lampAtm.Density
+				lampAtm.obj.Haze=lampAtm.Haze
+			end
+			if lampCC then pcall(function() lampCC:Destroy() end); lampCC=nil end
+			notify("LAMPU OFF","Pencahayaan normal")
+		end
+	end)
+
+	task.spawn(function()
+		while main.Parent do
+			task.wait(1)
+			if lampOn then applyLamp() end
+		end
+	end)
+end)
+
+-- =====================================================================
+-- TAB GENERATOR (versi baru: tekan sinyal + klik layar, prompt ditahan sekali, ESP LABU & WINDOW)
+-- =====================================================================
+section("GENERATOR",function()
+	local P=addTab("Generator","AUTO GENERATOR")
+	local pg=lp:WaitForChild("PlayerGui")
+
+	-- ===== PENGATURAN =====
+	local mode="off"             -- off / sukses / instan
+	local RANGE={116,159}        -- zona putih (mode sukses)
+	local INSTANT_TARGET=109     -- posisi jarum untuk mode instan
+	local INSTANT_DELAY=0.02
+	local RETRY_AFTER=0.25
+	local EXTRA_LEAD=0.02
+	local FLEE_DIST=45
+	local FLEE_COOLDOWN=2
+	local SCAN_EVERY=4
+	local STAY_NO_PROMPT=4
+	local PCT_WORDS={"progress","percent","repair","charge"}
+	local LABU_COL=Color3.fromRGB(255,140,0)
+	local WIN_COL=Color3.fromRGB(0,200,255)
+
+	-- ===== SKILLCHECK (objek di-cache) =====
+	local cache={t=0}
+	local function alive(o) return o~=nil and o.Parent~=nil end
+	local function refreshObjs()
+		local now=os.clock()
+		if now-cache.t<0.1 then return end
+		cache.t=now
+		local gui=pg:FindFirstChild("SkillCheckPromptGui")
+		cache.gui=gui
+		cache.line=gui and gui:FindFirstChild("Line",true)
+		cache.goal=gui and gui:FindFirstChild("Goal",true)
+		local mob=pg:FindFirstChild("Survivor-mob")
+		cache.action=mob and mob:FindFirstChild("action",true)
+	end
+	local function getObjs()
+		if not (alive(cache.gui) and alive(cache.line) and alive(cache.goal) and alive(cache.action)) then
+			refreshObjs()
+		end
+		return cache.gui,cache.line,cache.goal,cache.action
+	end
+	local function isShown(o)
+		while o and o~=pg do
+			if o:IsA("GuiObject") and not o.Visible then return false end
+			if o:IsA("ScreenGui") and not o.Enabled then return false end
+			o=o.Parent
+		end
+		return true
+	end
+	local function fireAll(signalGetter)
+		local ok1,sig=pcall(signalGetter)
+		if not ok1 or not sig then return false end
+		local done=false
+		if getconnections then
+			local ok2,list=pcall(getconnections,sig)
+			if ok2 and list then
+				for _,c in ipairs(list) do
+					pcall(function() c:Fire() end)
+					done=true
+				end
+			end
+		end
+		if not done and firesignal then
+			done=pcall(firesignal,sig)
+		end
+		return done
+	end
+	local function pressSignal(btn)
+		fireAll(function() return btn.MouseButton1Down end)
+		fireAll(function() return btn.MouseButton1Up end)
+		fireAll(function() return btn.MouseButton1Click end)
+		fireAll(function() return btn.Activated end)
+	end
+	local function pressClick(btn)
+		local VIM=game:GetService("VirtualInputManager")
+		local p=btn.AbsolutePosition+btn.AbsoluteSize/2
+		local inset=GuiService:GetGuiInset()
+		local x,y=p.X,p.Y+inset.Y
+		pcall(function()
+			VIM:SendMouseButtonEvent(x,y,0,true,game,0)
+			VIM:SendMouseButtonEvent(x,y,0,false,game,0)
+		end)
+	end
+	local pressCount=0
+	local function pressAction(btn)
+		if not btn then return end
+		pressCount=pressCount+1
+		-- sinyal tombol + klik layar sekaligus (sinyal saja kadang tidak dihitung game)
+		pressSignal(btn)
+		pressClick(btn)
+	end
+	local function relAngle(line,goal) return (line.Rotation-goal.Rotation)%360 end
+	local function inRange(x,r) return x>=r[1] and x<=r[2] end
+	local function crosses(a,b,m)
+		local d=(b-a+180)%360-180
+		local k=(m-a+180)%360-180
+		if d>=0 then return k>=0 and k<=d end
+		return k<=0 and k>=d
+	end
+	local function getLead()
+		local ping=0
+		pcall(function() ping=lp:GetNetworkPing() end)
+		return ping+EXTRA_LEAD
+	end
+
+	local fired,firedAt,seenAt=false,0,nil
+	local lastStatus="mati"
+	local lastRel,lastT=nil,nil
+
+	local function step()
+		local gui,line,goal,action=getObjs()
+		if not gui then
+			lastStatus="SkillCheckPromptGui tidak ada"
+		elseif not line or not goal then
+			lastStatus="Line/Goal tidak ketemu"
+		elseif not action then
+			lastStatus="tombol action tidak ketemu"
+		elseif not isShown(line) then
+			lastStatus="skillcheck belum muncul"
+		else
+			lastStatus=string.format("AKTIF rel=%.1f",relAngle(line,goal))
+		end
+
+		if not (gui and line and goal and action) or not isShown(line) then
+			fired=false
+			seenAt=nil
+			lastRel,lastT=nil,nil
+			return
+		end
+
+		local now=os.clock()
+		local rel=relAngle(line,goal)
+		local speed=0
+		if lastRel and lastT and now>lastT then
+			local d=(rel-lastRel+180)%360-180
+			speed=d/(now-lastT)
+		end
+		lastRel,lastT=rel,now
+
+		if fired then
+			if now-firedAt>RETRY_AFTER then
+				fired=false
+				seenAt=nil
+			else
+				return
+			end
+		end
+
+		if mode=="instan" then
+			-- tekan HANYA saat jarum benar-benar masuk ke sekitar target (±12 derajat)
+			local win={INSTANT_TARGET-12,INSTANT_TARGET+12}
+			local predicted=(rel+speed*getLead())%360
+			if inRange(rel,win) or crosses(rel,predicted,INSTANT_TARGET) then
+				fired=true
+				firedAt=now
+				pressAction(action)
+			end
+		else -- sukses: prediksi, jarum cepat tetap kena
+			local mid=(RANGE[1]+RANGE[2])/2
+			local predicted=(rel+speed*getLead())%360
+			if inRange(rel,RANGE) or crosses(rel,predicted,mid) then
+				fired=true
+				firedAt=now
+				pressAction(action)
+			end
+		end
+	end
+
+	-- dibungkus pcall supaya error tidak menghentikan skillcheck
+	local function safeStep()
+		if mode=="off" then
+			lastStatus="mati"
+			return
+		end
+		local okS,eS=pcall(step)
+		if not okS then lastStatus="error: "..tostring(eS) end
+	end
+	pcall(function() RunService:UnbindFromRenderStep("DeltaPart5_SC") end)
+	RunService:BindToRenderStep("DeltaPart5_SC",Enum.RenderPriority.Last.Value,safeStep)
+	track(RunService.Heartbeat:Connect(safeStep))
+
+	-- =================================================================
+	-- DATA GENERATOR / PALET
+	-- =================================================================
+	local gens,pals={},{}
+	local skip=setmetatable({},{__mode="k"})
+	local pctCache=setmetatable({},{__mode="k"})
+	local promptCache=setmetatable({},{__mode="k"})
+	local scanning=false
+	local lastScan=0
+	local function needScan() lastScan=0 end
+
+	local function nameHas(n,w)
+		return string.find(string.lower(n),w,1,true)~=nil
+	end
+	local function isPalletName(n)
+		local l=string.lower(n)
+		if string.find(l,"box",1,true) or string.find(l,"crate",1,true) or string.find(l,"container",1,true) then
+			return false
+		end
+		return string.find(l,"pallet",1,true)~=nil or string.find(l,"palet",1,true)~=nil
+	end
+	local function scanMap()
+		if scanning then return end
+		scanning=true
+		lastScan=os.clock()
+		pcall(function()
+			local g,p={},{}
+			local i=0
+			for _,d in ipairs(workspace:GetDescendants()) do
+				i=i+1
+				if i%1500==0 then task.wait() end
+				if d:IsA("Model") and not Players:GetPlayerFromCharacter(d) then
+					local isG=nameHas(d.Name,"generator")
+					local isP=(not isG) and isPalletName(d.Name)
+					if isG or isP then
+						local par=d.Parent
+						local nested=par and par:IsA("Model")
+							and (nameHas(par.Name,"generator") or nameHas(par.Name,"pallet"))
+						if not nested then
+							if isG then table.insert(g,d) else table.insert(p,d) end
+						end
+					end
+				end
+			end
+			gens,pals=g,p
+		end)
+		scanning=false
+	end
+	local function mainPart(m)
+		return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart",true)
+	end
+	local function genPos(g)
+		local ok1,cf=pcall(function() return g:GetPivot() end)
+		if ok1 and cf then return cf.Position end
+		local p=mainPart(g)
+		return p and p.Position or Vector3.zero
+	end
+
+	-- ----- baca persen -----
+	local function isPctName(n)
+		local l=string.lower(n)
+		for _,bad in ipairs({"max","speed","rate","time","total","skill"}) do
+			if string.find(l,bad,1,true) then return false end
+		end
+		for _,w in ipairs(PCT_WORDS) do
+			if string.find(l,w,1,true) then return true end
+		end
+		return false
+	end
+	local function findPctSource(g)
+		local function checkAttrs(inst)
+			for name,val in pairs(inst:GetAttributes()) do
+				if type(val)=="number" and isPctName(name) then
+					return {kind="attr",inst=inst,name=name,maxSeen=0,frac=false}
+				end
+			end
+		end
+		local s=checkAttrs(g)
+		if s then return s end
+		for _,d in ipairs(g:GetDescendants()) do
+			if (d:IsA("NumberValue") or d:IsA("IntValue")) and isPctName(d.Name) then
+				return {kind="val",inst=d,name=d.Name,maxSeen=0,frac=false}
+			end
+			if not d:IsA("BasePart") then
+				s=checkAttrs(d)
+				if s then return s end
+			end
+		end
+		return nil
+	end
+	local function readPct(g)
+		local c=pctCache[g]
+		if not c or (not c.src and os.clock()-c.tried>5)
+		or (c.src and not c.src.inst.Parent) then
+			c={src=findPctSource(g),tried=os.clock()}
+			pctCache[g]=c
+		end
+		local src=c.src
+		if not src then return nil,nil end
+		local v
+		if src.kind=="val" then v=src.inst.Value else v=src.inst:GetAttribute(src.name) end
+		if type(v)~="number" then return nil,nil end
+		if v>src.maxSeen then src.maxSeen=v end
+		if v>0 and v<1 then src.frac=true end
+		local pct
+		if src.maxSeen>1 then pct=v
+		elseif src.frac then pct=v*100
+		else pct=v end
+		return math.clamp(pct,0,100),src.name
+	end
+	local function isDone(g)
+		local p=readPct(g)
+		return p~=nil and p>=99.5
+	end
+	local function fmtPct(p)
+		return p and string.format("%d%%",math.floor(p+0.5)) or "?%"
+	end
+
+	-- ----- prompt repair -----
+	local function getPrompts(g)
+		local c=promptCache[g]
+		if c and os.clock()-c.t<2 then return c.list end
+		local list={}
+		for _,d in ipairs(g:GetDescendants()) do
+			if d:IsA("ProximityPrompt") then table.insert(list,d) end
+		end
+		promptCache[g]={t=os.clock(),list=list}
+		return list
+	end
+	local function promptPos(p,g)
+		local par=p.Parent
+		if par and par:IsA("Attachment") then return par.WorldPosition end
+		if par and par:IsA("BasePart") then return par.Position end
+		return genPos(g)
+	end
+
+	-- ----- tempat berdiri di samping generator yang tidak terhalang -----
+	local spotParams=RaycastParams.new()
+	spotParams.FilterType=Enum.RaycastFilterType.Exclude
+	pcall(function() spotParams.RespectCanCollide=true end)
+	local overlap=OverlapParams.new()
+	overlap.FilterType=Enum.RaycastFilterType.Exclude
+
+	local function findSpot(g)
+		local gp=genPos(g)
+		local ps=getPrompts(g)
+		local base=ps[1] and promptPos(ps[1],g) or gp
+		local ign={g}
+		if lp.Character then table.insert(ign,lp.Character) end
+		spotParams.FilterDescendantsInstances=ign
+		overlap.FilterDescendantsInstances=ign
+		local hrp=getHRP(lp)
+		local myPos=hrp and hrp.Position or base
+		local maxDist=(ps[1] and ps[1].MaxActivationDistance or 10)-1
+		local best,bestScore
+		local loose,looseScore
+		for _,r in ipairs({3.5,5,2.5}) do
+			for k=0,11 do
+				local a=(k/12)*math.pi*2
+				local spot=Vector3.new(base.X+math.cos(a)*r,base.Y,base.Z+math.sin(a)*r)
+				local hit=workspace:Raycast(spot+Vector3.new(0,5,0),Vector3.new(0,-16,0),spotParams)
+				if hit and hit.Normal.Y>0.6 then
+					local stand=hit.Position+Vector3.new(0,3,0)
+					if (stand-base).Magnitude<=maxDist then
+						local headRoom=workspace:Raycast(hit.Position+Vector3.new(0,0.5,0),Vector3.new(0,5.5,0),spotParams)
+						local occupied=false
+						local parts=workspace:GetPartBoundsInBox(CFrame.new(stand),Vector3.new(2.5,4,2.5),overlap)
+						for _,pt in ipairs(parts) do
+							if pt.CanCollide then occupied=true break end
+						end
+						if not headRoom and not occupied then
+							local score=(stand-myPos).Magnitude+r*0.5
+							local toGen=Vector3.new(base.X,stand.Y,base.Z)-stand
+							local blocked=workspace:Raycast(stand,toGen,spotParams)
+							if not blocked then
+								if not bestScore or score<bestScore then best,bestScore=stand,score end
+							end
+							if not looseScore or score<looseScore then loose,looseScore=stand,score end
+						end
+					end
+				end
+			end
+		end
+		local pos=best or loose
+		if not pos then return CFrame.new(base+Vector3.new(0,2,3)) end
+		return CFrame.new(pos,Vector3.new(base.X,pos.Y,base.Z))
+	end
+
+	local function tpTo(g)
+		local hrp=getHRP(lp)
+		if not hrp then return end
+		local ok1,cf=pcall(findSpot,g)
+		if not ok1 or not cf then cf=CFrame.new(genPos(g)+Vector3.new(0,3,3)) end
+		hrp.CFrame=cf
+		pcall(function()
+			hrp.AssemblyLinearVelocity=Vector3.zero
+			hrp.AssemblyAngularVelocity=Vector3.zero
+		end)
+	end
+
+	-- ----- repair otomatis (tahan sekali per prompt, tidak diputus berkala) -----
+	local heldPrompt=nil
+	local function releaseHold()
+		if heldPrompt then
+			local hp=heldPrompt
+			heldPrompt=nil
+			pcall(function() hp:InputHoldEnd() end)
+		end
+	end
+	local function repair(g)
+		local hrp=getHRP(lp)
+		if not hrp then return false end
+		local best,bd
+		for _,p in ipairs(getPrompts(g)) do
+			if p.Parent and p.Enabled then
+				local d=(promptPos(p,g)-hrp.Position).Magnitude
+				if not bd or d<bd then best,bd=p,d end
+			end
+		end
+		if not best then
+			releaseHold()
+			return false
+		end
+		pcall(function() best.RequiresLineOfSight=false end)
+		if fireproximityprompt then
+			pcall(fireproximityprompt,best)
+		else
+			if heldPrompt~=best then
+				releaseHold()
+				heldPrompt=best
+				pcall(function() best:InputHoldBegin() end)
+			end
+		end
+		return true
+	end
+
+	-- ----- killer & pilih generator -----
+	local function nearestKiller(myPos)
+		local best,bd
+		for _,pl in ipairs(Players:GetPlayers()) do
+			if pl~=lp and pl.Team and nameHas(pl.Team.Name,"killer") then
+				local h=getHRP(pl)
+				if h then
+					local d=(h.Position-myPos).Magnitude
+					if not bd or d<bd then best,bd=h,d end
+				end
+			end
+		end
+		return best,bd
+	end
+	local function usable(g,exclude)
+		if g==exclude or not g.Parent then return false end
+		if skip[g] and skip[g]>os.clock() then return false end
+		return not isDone(g)
+	end
+	local function pickNearest(pos)
+		local best,bd
+		for _,g in ipairs(gens) do
+			if usable(g) then
+				local d=(genPos(g)-pos).Magnitude
+				if not bd or d<bd then best,bd=g,d end
+			end
+		end
+		return best
+	end
+	local function pickFarthest(kpos,exclude)
+		local best,bd
+		for _,g in ipairs(gens) do
+			if usable(g,exclude) then
+				local d=(genPos(g)-kpos).Magnitude
+				if not bd or d>bd then best,bd=g,d end
+			end
+		end
+		return best
+	end
+
+	-- =================================================================
+	-- ESP sorot per nama (dipakai LABU dan WINDOW). Hanya sorot, tanpa nama.
+	-- Semua objek yang cocok disorot (tidak ada pengecualian untuk objek bertingkat).
+	-- =================================================================
+	local function makeNameEsp(matchFn,col)
+		local tbl={}   -- objek -> highlight
+		local on=false
+		local function clear()
+			for o,h in pairs(tbl) do
+				pcall(function() h:Destroy() end)
+				tbl[o]=nil
+			end
+		end
+		local function tick()
+			if not on then return end
+			local want={}
+			local n=0
+			for _,d in ipairs(workspace:GetDescendants()) do
+				if n>=500 then break end
+				if (d:IsA("Model") or d:IsA("BasePart")) and matchFn(d.Name) and not Players:GetPlayerFromCharacter(d) then
+					want[d]=true
+					n=n+1
+				end
+			end
+			for obj in pairs(want) do
+				if not tbl[obj] or not tbl[obj].Parent then
+					tbl[obj]=new("Highlight",{Adornee=obj,FillColor=col,
+						OutlineColor=Color3.fromRGB(255,255,255),FillTransparency=0.4,
+						DepthMode=Enum.HighlightDepthMode.AlwaysOnTop},espFolder)
+				end
+			end
+			for obj,h in pairs(tbl) do
+				if not want[obj] or not obj.Parent then
+					pcall(function() h:Destroy() end)
+					tbl[obj]=nil
+				end
+			end
+		end
+		task.spawn(function()
+			while main.Parent do
+				task.wait(1.5)
+				pcall(tick)
+			end
+		end)
+		return function(v)
+			on=v and true or false
+			if not on then clear() end
+		end
+	end
+	local setLabu=makeNameEsp(function(n)
+		local l=string.lower(n)
+		return string.find(l,"pumpkin",1,true)~=nil or string.find(l,"labu",1,true)~=nil
+	end,LABU_COL)
+
+	-- =================================================================
+	-- TOMBOL (P.toggle memakai key tetap supaya pengaturan tersimpan tetap terbaca)
+	-- =================================================================
+	local rushOn,fleeOn,pctOn,espGenOn,espPalOn=false,false,false,false,false
+	local target=nil
+	local lastFlee=0
+	local lastTp=0
+	local noPromptSince=nil
+	local genStatus="mati"
+
+	local tgSuk,tgIns
+	tgSuk=P.toggle("genSuk","AUTO SUKSES",false,function(on)
+		if on then
+			mode="sukses"
+			if tgIns and tgIns.value then tgIns.set(false,true) end
+		elseif mode=="sukses" then
+			mode="off"
+		end
+		fired=false
+		seenAt=nil
+		notify(on and "AUTO SUKSES ON" or "AUTO SUKSES OFF",on and "Jarum diprediksi, tekan tepat di putih" or "Dimatikan")
+	end)
+	tgIns=P.toggle("genIns","AUTO INSTAN",false,function(on)
+		if on then
+			mode="instan"
+			if tgSuk and tgSuk.value then tgSuk.set(false,true) end
+		elseif mode=="instan" then
+			mode="off"
+		end
+		fired=false
+		seenAt=nil
+		notify(on and "AUTO INSTAN ON" or "AUTO INSTAN OFF",on and "Jarum langsung ke putih" or "Dimatikan")
+	end)
+	P.toggle("rush","RUSUH GENERATOR",false,function(on)
+		rushOn=on
+		target=nil
+		noPromptSince=nil
+		releaseHold()
+		if on then
+			needScan()
+			notify("RUSUH ON","Teleport ke generator, repair sampai 100%")
+		else
+			notify("RUSUH OFF","Dimatikan")
+		end
+	end)
+	P.toggle("flee","LARI DARI KILLER",false,function(on)
+		fleeOn=on
+		if on then needScan() end
+		notify(on and "LARI ON" or "LARI OFF",on and "Killer dekat = teleport ke generator jauh" or "Dimatikan")
+	end)
+	P.toggle("pct","PERSEN GENERATOR",false,function(on)
+		pctOn=on
+		if on then needScan() end
+	end)
+	P.toggle("espGen","ESP GENERATOR",false,function(on)
+		espGenOn=on
+		if on then needScan() end
+	end)
+	local colGen=P.colors("colGen","Warna ESP generator",7)
+	P.toggle("espPal","ESP PALET",false,function(on)
+		espPalOn=on
+		if on then needScan() end
+	end)
+	local colPal=P.colors("colPal","Warna ESP palet",3)
+	P.toggle("espLabu","ESP LABU (Pumpkin)",false,function(on)
+		setLabu(on)
+		notify(on and "ESP LABU ON" or "ESP LABU OFF",on and "Semua Pumpkin disorot" or "Dimatikan")
+	end)
+	local statusLbl=P.info("status: ...",96)
+
+	-- =================================================================
+	-- LOOP SCAN (hanya jalan kalau ada fitur yang butuh)
+	-- =================================================================
+	task.spawn(function()
+		while main.Parent do
+			task.wait(1)
+			if (rushOn or fleeOn or pctOn or espGenOn or espPalOn) and os.clock()-lastScan>SCAN_EVERY then
+				pcall(scanMap)
+			end
+		end
+	end)
+
+	-- =================================================================
+	-- LOOP RUSUH (tunggu 100% baru pindah) + LARI
+	-- =================================================================
+	local function rushTick()
+		if rushOn or fleeOn then
+			local hrp=getHRP(lp)
+			if hrp then
+				local kh,kd=nearestKiller(hrp.Position)
+				if fleeOn and kh and kd<FLEE_DIST and os.clock()-lastFlee>FLEE_COOLDOWN then
+					local g=pickFarthest(kh.Position,target)
+					if g then
+						releaseHold()
+						target=g
+						lastFlee=os.clock()
+						lastTp=os.clock()
+						noPromptSince=nil
+						tpTo(g)
+					end
+				end
+				if rushOn then
+					if not target or not usable(target) then
+						releaseHold()
+						target=pickNearest(hrp.Position)
+						noPromptSince=nil
+						if target then
+							tpTo(target)
+							lastTp=os.clock()
+						end
+					end
+					if target then
+						-- teleport ulang hanya kalau terlempar jauh
+						if (hrp.Position-genPos(target)).Magnitude>30 and os.clock()-lastTp>1.5 then
+							tpTo(target)
+							lastTp=os.clock()
+						end
+						if repair(target) then
+							noPromptSince=nil
+						else
+							noPromptSince=noPromptSince or os.clock()
+							-- pindah hanya kalau persen tidak terbaca dan prompt hilang lama
+							if readPct(target)==nil and os.clock()-noPromptSince>STAY_NO_PROMPT then
+								skip[target]=os.clock()+20
+								target=nil
+								noPromptSince=nil
+							end
+						end
+						if target then
+							genStatus="repair "..target.Name.." "..fmtPct((readPct(target)))
+						end
+					else
+						genStatus=(#gens==0) and "generator tidak ketemu" or "semua generator selesai"
+					end
+				else
+					genStatus=target and ("kabur ke "..target.Name) or "siaga kabur"
+				end
+				if kd then genStatus=genStatus..string.format(" | killer %dm",math.floor(kd)) end
+			end
+		else
+			if target then releaseHold() end
+			target=nil
+			genStatus="mati"
+		end
+	end
+	task.spawn(function()
+		while main.Parent do
+			task.wait((rushOn or fleeOn) and 0.15 or 0.5)
+			pcall(rushTick)
+		end
+	end)
+
+	-- =================================================================
+	-- ESP GENERATOR / PALET (generator muncul saat terhalang tembok; palet selalu)
+	-- =================================================================
+	local objHl={}
+	local objParams=RaycastParams.new()
+	objParams.FilterType=Enum.RaycastFilterType.Exclude
+	local function objHidden(m)
+		local cam=workspace.CurrentCamera
+		if not cam then return false end
+		local ign={m}
+		if lp.Character then table.insert(ign,lp.Character) end
+		objParams.FilterDescendantsInstances=ign
+		local origin=cam.CFrame.Position
+		local pts={genPos(m)}
+		local mp=mainPart(m)
+		if mp then pts[#pts+1]=mp.Position end
+		for _,pos in ipairs(pts) do
+			if not workspace:Raycast(origin,pos-origin,objParams) then return false end
+		end
+		return true
+	end
+	local function espTick()
+		if not (espGenOn or espPalOn or next(objHl)) then return end
+		local want={}
+		if espGenOn then for _,g in ipairs(gens) do want[g]="gen" end end
+		if espPalOn then for _,p in ipairs(pals) do want[p]="pal" end end
+		for m,key in pairs(want) do
+			local o=objHl[m]
+			if not o or o.key~=key or not o.hl.Parent then
+				if o then pcall(function() o.hl:Destroy() end) end
+				objHl[m]={key=key,hl=new("Highlight",{
+					Adornee=m,FillTransparency=0.6,OutlineTransparency=0,
+					DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,Enabled=false,
+				},espFolder)}
+			end
+		end
+		for m,o in pairs(objHl) do
+			if not want[m] or not m.Parent then
+				pcall(function() o.hl:Destroy() end)
+				objHl[m]=nil
+			else
+				local col=(o.key=="gen") and PALETTE[colGen.value].c or PALETTE[colPal.value].c
+				o.hl.FillColor=col
+				o.hl.OutlineColor=col
+				o.hl.Enabled=(o.key=="pal") or objHidden(m)
+			end
+		end
+	end
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.4)
+			pcall(espTick)
+		end
+	end)
+
+	-- =================================================================
+	-- PERSEN DI ATAS GENERATOR
+	-- =================================================================
+	local pctBB={}
+	local function pctTick()
+		if pctOn then
+			for _,g in ipairs(gens) do
+				local b=pctBB[g]
+				if not b or not b.bb.Parent then
+					local part=mainPart(g)
+					if part then
+						local bb=new("BillboardGui",{
+							Adornee=part,Size=UDim2.new(0,70,0,24),
+							StudsOffset=Vector3.new(0,4,0),AlwaysOnTop=true,
+						},espFolder)
+						local lbl=new("TextLabel",{
+							BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
+							Font=FONTB,TextSize=18,TextStrokeTransparency=0.3,
+							TextColor3=TXT,Text="?%",
+						},bb)
+						b={bb=bb,lbl=lbl}
+						pctBB[g]=b
+					end
+				end
+				if b then
+					local pct=readPct(g)
+					b.lbl.Text=fmtPct(pct)
+					if not pct then
+						b.lbl.TextColor3=Color3.fromRGB(200,200,200)
+					elseif pct>=99.5 then
+						b.lbl.TextColor3=Color3.fromRGB(80,230,100)
+					elseif pct>=50 then
+						b.lbl.TextColor3=Color3.fromRGB(240,200,60)
+					else
+						b.lbl.TextColor3=Color3.fromRGB(255,120,80)
+					end
+				end
+			end
+		end
+		for g,b in pairs(pctBB) do
+			if not pctOn or not g.Parent then
+				pcall(function() b.bb:Destroy() end)
+				pctBB[g]=nil
+			end
+		end
+	end
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.4)
+			pcall(pctTick)
+		end
+	end)
+
+	-- =================================================================
+	-- UPDATE STATUS (hanya saat tab Generator terbuka)
+	-- =================================================================
+	task.spawn(function()
+		while main.Parent do
+			task.wait(0.25)
+			if Frame.Visible and P.page.Visible then
+				pcall(function()
+					local src=""
+					if gens[1] then
+						local _,nm=readPct(gens[1])
+						src=nm and ("persen dari: "..nm) or "persen: sumber TIDAK ketemu"
+					end
+					statusLbl.Text=string.format("SC: %s | tekan: %d\nGEN: %d ketemu, palet %d | %s\n%s",
+						lastStatus,pressCount,#gens,#pals,genStatus,src)
+				end)
+			end
+		end
+	end)
+end)
+
+-- =====================================================================
+-- TOMBOL SIMPAN + RESET (paling bawah menu kiri)
+-- =====================================================================
+do
+	local saveBtn=new("TextButton",{
+		Size=UDim2.new(1,-8,0,26),Font=FONTB,TextSize=12,LayoutOrder=99,AutoButtonColor=true,Text="",
+	},sidebar)
+	corner(saveBtn,6)
+	local function paintSave()
+		saveBtn.Text=autoSave and "SIMPAN: ON" or "SIMPAN: OFF"
+		saveBtn.BackgroundColor3=autoSave and ACC or OFFBG
+		saveBtn.TextColor3=autoSave and BLACK or DIM
+	end
+	paintSave()
+	saveBtn.MouseButton1Click:Connect(function()
+		autoSave=not autoSave
+		paintSave()
+		saveNow()
+		notify(autoSave and "AUTO SIMPAN ON" or "AUTO SIMPAN OFF",
+			autoSave and "Pengaturan disimpan & dimuat otomatis" or "Pengaturan tidak disimpan lagi")
+	end)
+
+	local resetBtn=new("TextButton",{
+		Size=UDim2.new(1,-8,0,26),BackgroundColor3=Color3.fromRGB(150,50,25),Font=FONTB,
+		Text="RESET",TextColor3=TXT,TextSize=13,LayoutOrder=100,AutoButtonColor=true,
+	},sidebar)
+	corner(resetBtn,6)
+	local confirmAt=0
+	resetBtn.MouseButton1Click:Connect(function()
+		if os.clock()-confirmAt>3 then
+			confirmAt=os.clock()
+			resetBtn.Text="YAKIN?"
+			task.delay(3,function()
+				if os.clock()-confirmAt>=3 then resetBtn.Text="RESET" end
+			end)
+			return
+		end
+		confirmAt=0
+		resetBtn.Text="RESET"
+		for _,c in pairs(controls) do pcall(c.set,c.default) end
+		pcall(function()
+			if delfile and isfile and isfile(CFG_FILE) then delfile(CFG_FILE) end
+		end)
+		G.GodConfig=nil
+		saveNow()
+		notify("RESET","Semua kembali ke stelan awal")
+	end)
+end
+
+-- ===================== ISI TAB AIM (paling akhir) =====================
+section("AIM",function()
+	buildAim(AimTab)
+end)
+
+-- ===================== MUAT PENGATURAN TERSIMPAN =====================
+showTab(1)
+Frame.Visible=true
+if autoSave then
+	for k,c in pairs(controls) do
+		if saved[k]~=nil then pcall(c.set,saved[k]) end
+	end
+end
+loading=false
+pcall(function()
+	StarterGui:SetCore("SendNotification",{
+		Title="☠️ Panel siap";Text=autoSave and "Pengaturan terakhir dimuat" or "Auto simpan OFF";Duration=3;
+	})
+end)
